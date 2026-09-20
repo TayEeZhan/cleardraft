@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from adapters.inbox import LocalInbox
-from core import aliases, pipeline
+from core import aliases, compare as compare_mod, normalise as norm, pipeline
 from core.types import COMPARE_FIELDS, Decision, Email, ExtractedDoc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -84,3 +84,83 @@ def test_split_si_bl_falls_back_to_filename() -> None:
 def test_seven_compare_fields_exactly() -> None:
     assert len(COMPARE_FIELDS) == 7
     assert len(set(COMPARE_FIELDS)) == 7
+
+
+# ---------------------------------------------------------------------------
+# Normaliser regression guards.
+#
+# These live here rather than in a unit-test file because they guard the
+# failure mode that costs the most and shows the least: a normaliser that is
+# too aggressive silently collapses two DIFFERENT values into one, deleting a
+# real defect with no error anywhere. End-to-end is 50% of the score.
+#
+# Zi Qi: your broader normaliser unit tests are still yours. These seven are
+# the ones that must never be deleted.
+# ---------------------------------------------------------------------------
+def test_weight_survives_a_decimal_point() -> None:
+    """Regression: stripping every non-digit turned "21,577.00" into 2157700.
+
+    A 100x error that guarantees a false mismatch, and "21,577.00 KGS" is a
+    very common real-world rendering.
+    """
+    assert norm.normalise_weight("21,577.00 KGS") == 21577
+    assert norm.normalise_weight("21577.0") == 21577
+    assert norm.normalise_weight(21577.0) == 21577
+    assert norm.normalise_weight("21.577") == 21577      # European thousands
+    assert norm.normalise_weight("21,577 KG") == 21577
+    assert norm.normalise_weight("341715") == 341715     # bare xlsx integer
+
+
+def test_normalisers_absorb_formatting() -> None:
+    assert norm.normalise_port("CALLAO, PERU (PECLL)") == norm.normalise_port("CALLAO, PERU")
+    assert norm.normalise_container_count("6 x 40'HC") == 6
+    assert norm.normalise_container_count("1 x 20GP") == 1
+    assert norm.normalise_entity("MOORIM SP CO., LTD") == norm.normalise_entity("MOORIM SP CO LTD")
+
+
+def test_normalisers_do_not_collapse_real_defects() -> None:
+    """The silent killer. Every planted defect is substantive, so any
+    normaliser that merges these has destroyed the end-to-end metric."""
+    assert norm.normalise_entity("MOORIM SP CO., LTD") != norm.normalise_entity("UAB NOVAKOPA")
+    assert norm.normalise_port("CALLAO, PERU") != norm.normalise_port("AQABA, JORDAN")
+    assert norm.normalise_container_count("3 x 40'HC") != norm.normalise_container_count("4 x 40'HC")
+    assert norm.normalise_weight("21,577 KG") != norm.normalise_weight("22,077 KG")
+    assert norm.normalise_weight("21,577 KG") != norm.normalise_weight("21,077 KG")
+
+
+def test_blank_tokens_normalise_to_none_not_empty_string() -> None:
+    """Two blank fields must be UNDECIDABLE, never a match against each other."""
+    for token in ("", "???", "_______", "TBA", "N/A"):
+        assert norm.normalise("shipper", token) is None, token
+        assert norm.normalise("gross_weight_kg", token) is None, token
+
+
+def test_compare_always_returns_seven_ordered_rows() -> None:
+    rows = compare_mod.compare(
+        ExtractedDoc(path="a_SI.txt", kind="SI"),
+        ExtractedDoc(path="a_BL.txt", kind="BL"),
+    )
+    assert len(rows) == 7
+    assert tuple(r.field for r in rows) == COMPARE_FIELDS
+
+
+def test_compare_never_raises_on_garbage() -> None:
+    """One malformed document must not end a 520-email batch."""
+    for si, bl in ((None, None), (ExtractedDoc(path="x", kind="SI"), None)):
+        rows = compare_mod.compare(si, bl)
+        assert len(rows) == 7
+        assert all(r.undecidable and not r.matched for r in rows)
+
+
+def test_compare_marks_a_blank_side_undecidable_not_matched() -> None:
+    from core.types import FieldValue
+
+    blank = FieldValue(value="", raw="Shipper: ???", line_no=3, label="Shipper")
+    real = FieldValue(value="APRIL FAR EAST (M) SDN BHD", raw="", line_no=3, label="Shipper")
+    rows = compare_mod.compare(
+        ExtractedDoc(path="s", kind="SI", fields={"shipper": blank}),
+        ExtractedDoc(path="b", kind="BL", fields={"shipper": real}),
+    )
+    shipper = next(r for r in rows if r.field == "shipper")
+    assert shipper.undecidable is True
+    assert shipper.matched is False

@@ -15,7 +15,9 @@ Deadline: Tue 22 Sep 2026. Read `PLAN.md` first, then your own brief in
 - [x] `tests/test_contract.py` — 7 tests, all passing
 - [x] Baseline measured: **0.0124** with every stage stubbed
 - [x] `docs/ARCHITECTURE.md`, `docs/RUBRIC_MAP.md`, both briefs
-- [ ] Push to GitHub, invite Sheng Kuan and Zi Qi
+- [x] README.md with setup instructions (mandatory per rules line 158)
+- [x] Public repo live: https://github.com/TayEeZhan/cleardraft
+- [x] Collaborator invitations sent to shengkuan06 and chessoreo
 
 ## Phase 1 — parallel build  (Mon 00:00-12:00)
 
@@ -34,11 +36,16 @@ Deadline: Tue 22 Sep 2026. Read `PLAN.md` first, then your own brief in
 - [ ] Unit tests for `core/normalise.py`
 
 ### Ee Zhan
-- [ ] `core/normalise.py`
-- [ ] `core/compare.py`
-- [ ] `core/decide.py` precedence ladder
-- [ ] `core/reply.py`
+- [x] `core/normalise.py`
+- [x] `core/compare.py`
+- [x] `core/decide.py` precedence ladder
+- [x] `core/reply.py`
 - [ ] `adapters/model.py` client
+
+**Validated 2026-09-20:** a throwaway parser feeding the real
+normalise/compare/decide path scored **84/84 exact defect-field match** on
+every comparable .txt pair. The comparison engine is not the risk any more;
+extraction and classification are.
 
 ## Phase 2 — integration  (Mon 12:00-16:00)
 - [ ] Merge three branches
