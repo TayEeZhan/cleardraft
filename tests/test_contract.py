@@ -164,3 +164,56 @@ def test_compare_marks_a_blank_side_undecidable_not_matched() -> None:
     shipper = next(r for r in rows if r.field == "shipper")
     assert shipper.undecidable is True
     assert shipper.matched is False
+
+
+# ---------------------------------------------------------------------------
+# Guards for the three defects the silent-failure review surfaced.
+# ---------------------------------------------------------------------------
+def test_port_strips_only_locode_shaped_brackets() -> None:
+    """Regression: stripping ANY trailing bracket collapsed genuinely
+    different places. "NEW YORK (APM TERMINAL)" and "NEW YORK (RED HOOK
+    TERMINAL)" are not the same port, and merging them deletes a real defect
+    with no error anywhere."""
+    # a UN/LOCODE is noise and must go (.txt carries it, .pdf does not)
+    assert norm.normalise_port("CALLAO, PERU (PECLL)") == norm.normalise_port("CALLAO, PERU")
+    # a non-trailing bracket is part of the port name and must survive
+    assert norm.normalise_port("PORT KLANG (WESTPORT), MALAYSIA (MYPKG)") == norm.normalise_port("PORT KLANG (WESTPORT), MALAYSIA")
+    assert "WESTPORT" in norm.normalise_port("PORT KLANG (WESTPORT), MALAYSIA (MYPKG)")
+    # anything not LOCODE-shaped is content, not noise
+    assert norm.normalise_port("NEW YORK (APM TERMINAL)") != norm.normalise_port("NEW YORK (RED HOOK TERMINAL)")
+
+
+def test_reply_never_claims_a_check_that_did_not_run() -> None:
+    """A clean-check reply on an email where no documents were compared tells
+    the clerk a verification happened when none did."""
+    from core import reply as reply_mod
+    from core.types import Decision
+
+    email = Email(
+        email_id="email_002",
+        sender="a@b.com",
+        subject="RE_ LOCAL CHARGES FOB - 5AKR-61849",
+        body="Hi Najiha, query on the invoice.",
+    )
+    invoice = Decision(
+        email_id="email_002", category="INVOICE_QUERY", status="OK",
+        review_reason=None, has_defect=False, defect_fields=(),
+        decided_by="rule", comparisons=(),
+    )
+    text = reply_mod.draft_reply(email, invoice)
+    assert "OK to proceed" not in text
+    assert "No mismatch detected" not in text
+
+
+def test_reply_recovers_the_reference_from_the_body() -> None:
+    """55 of 520 emails carry the OC reference only in the body. Drafting
+    "draft BL for email_004" is useless to a clerk."""
+    from core.reply import _reference
+
+    email = Email(
+        email_id="email_004",
+        sender="a@b.com",
+        subject="REQUEST BL DRAFT _ PO 26067_ COATED IVORY BOARD__138MT",
+        body="Hi Mitchelle, attached are the SI and draft BL for OC 5ALT-01226.",
+    )
+    assert _reference(email) == "5ALT-01226"

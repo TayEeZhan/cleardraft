@@ -26,7 +26,15 @@ from core.types import CompareField
 #: "MOORIM SP CO., LTD" vs "MOORIM SP CO LTD". Strip it everywhere, not just
 #: at the end, since it can appear mid-string before a suffix like "LTD".
 _ENTITY_PUNCT = re.compile(r"[.,]")
-_TRAILING_LOCODE = re.compile(r"\s*\([^)]*\)\s*$")
+#: A trailing bracket is stripped ONLY when it holds something LOCODE-shaped:
+#: two letters then three alphanumerics, e.g. (MYPKG), (PECLL), (USNYC).
+#: Stripping ANY trailing bracket would be a silent killer. "NEW YORK (APM
+#: TERMINAL)" and "NEW YORK (RED HOOK TERMINAL)" are genuinely different
+#: places, and collapsing them to "NEW YORK" would delete a real defect with
+#: no error anywhere. Verified against the dataset: every trailing bracket in
+#: a port field here is a 5-character UN/LOCODE, and non-trailing brackets
+#: such as "PORT KLANG (WESTPORT), MALAYSIA (MYPKG)" are left untouched.
+_TRAILING_LOCODE = re.compile(r"\s*\(\s*[A-Za-z]{2}[A-Za-z0-9]{3}\s*\)\s*$")
 _WHITESPACE = re.compile(r"\s+")
 _LEADING_INT = re.compile(r"\d+")
 #: keep digits and both separators; strip units ("KG", "KGS", "MT") and spaces

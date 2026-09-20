@@ -26,6 +26,12 @@ CLEAR_TEMPLATE = """Hi {name},
 No mismatch detected. Draft BL for {ref} is OK to proceed.
 """
 
+NOTHING_TO_CHECK_TEMPLATE = """Hi {name},
+
+Noted on {ref}. No document comparison was required for this message, so no
+SI/BL check was carried out.
+"""
+
 REVIEW_TEMPLATE = """Hi {name},
 
 We could not complete the check on {ref}: {reason}.
@@ -81,15 +87,38 @@ def _recipient_name(email: Email) -> str:
     return "team"
 
 
+#: Start of a forwarded/quoted tail. Anything past this belongs to an earlier
+#: message, so a reference found there may name a different shipment.
+_QUOTED_TAIL_RE = re.compile(r"\n\s*(?:_{5,}|-{5,}|From:\s)", re.MULTILINE)
+
+
+def _own_body(email: Email) -> str:
+    """The part of the body this sender actually wrote."""
+    body = email.body or ""
+    m = _QUOTED_TAIL_RE.search(body)
+    return body[: m.start()] if m else body
+
+
 def _reference(email: Email) -> str:
+    """Prefer the coded OC reference. Subject first, then the sender's own text.
+
+    55 of the 520 emails put the OC reference only in the body, e.g. subject
+    "REQUEST BL DRAFT _ PO 26067_ COATED IVORY BOARD__138MT" with the real
+    reference 5ALT-01226 in the first line. Falling straight through to
+    email_id would draft "draft BL for email_004", which means nothing to a
+    clerk and makes the reply useless.
+    """
     try:
         subject = email.subject or ""
-        m = _OC_REF_RE.search(subject)
-        if m:
-            return m.group(0)
-        m = _BOOKING_REF_RE.search(subject)
-        if m:
-            return m.group(0)
+        for pattern in (_OC_REF_RE, _BOOKING_REF_RE):
+            m = pattern.search(subject)
+            if m:
+                return m.group(0)
+        own = _own_body(email)
+        for pattern in (_OC_REF_RE, _BOOKING_REF_RE):
+            m = pattern.search(own)
+            if m:
+                return m.group(0)
     except Exception:
         pass
     return email.email_id or "this case"
@@ -128,12 +157,17 @@ def draft_reply(email: Email, decision: Decision) -> str:
     """Pick a template by decision.status and fill it. Never raises."""
     try:
         return _draft_reply(email, decision)
-    except Exception:
+    except Exception as exc:
+        # Escalate in wording AND record what happened. A drafting bug that
+        # silently degrades every MISMATCH into a generic "needs review" note
+        # would be indistinguishable from ordinary escalation, so the reason
+        # is carried in the text the operator actually reads.
+        detail = f"reply drafting failed ({exc.__class__.__name__}: {exc})"
         try:
             return REVIEW_TEMPLATE.format(
                 name="team",
                 ref=getattr(email, "email_id", None) or "this case",
-                reason="the case needs manual review",
+                reason=detail,
             )
         except Exception:
             return (
@@ -158,8 +192,11 @@ def _draft_reply(email: Email, decision: Decision) -> str:
             name=name, ref=ref, reason=_review_reason_phrase(decision)
         )
 
-    # status == "OK". The spec-defined case is category BL_COMPARISON, but an
-    # OK decision on any other category (GENERAL, SI_REQUEST, INVOICE_QUERY,
-    # SPAM) also lands here and there is no fourth template to pick, so the
-    # clear template - the closest to "nothing wrong here" - is reused.
-    return CLEAR_TEMPLATE.format(name=name, ref=ref)
+    # status == "OK". Only claim a clean check when a check actually ran.
+    # Saying "No mismatch detected. Draft BL is OK to proceed" on an email
+    # where no documents were compared - an invoice query, or a request to
+    # SEND a draft BL - tells the clerk a verification happened when none did.
+    if decision.category == "BL_COMPARISON" and decision.comparisons:
+        return CLEAR_TEMPLATE.format(name=name, ref=ref)
+
+    return NOTHING_TO_CHECK_TEMPLATE.format(name=name, ref=ref)
