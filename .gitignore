@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# NEVER COMMIT. Ground-truth labels and the organiser's scorer live under
+# .secrets/ and are deliberately excluded from version control.
+# We measure against them. We do not tune to them. See PLAN.md section 8.
+# ---------------------------------------------------------------------------
+.secrets/
+ground_truth.json
+organiser_scoring.py
+
+# secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# node / next
+node_modules/
+.next/
+out/
+.vercel/
+
+# build output
+dist/
+build/
+out/submission*.json
+*.log
+.pytest_cache/
