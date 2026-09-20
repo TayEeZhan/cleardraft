@@ -68,51 +68,29 @@ _SPAM_RULES = _rules(
     (r"bank officer with an urgent business proposal", "SPAM", "spam", 0.99),
 )
 
-_COMPARISON_RULES = _rules(
-    (
-        r"please assist to send the draft bl\b.{0,160}?\bfor checking(?:\s+asap)?",
-        "BL_COMPARISON",
-        "send_doc",
-        0.99,
-    ),
-    (
-        r"attached are the si and draft bl\b.{0,220}?please check the details and confirm",
-        "BL_COMPARISON",
-        "compare",
-        0.99,
-    ),
-    (
-        r"please find attached the shipping instruction and the draft bill of lading\b"
-        r".{0,240}?kindly verify the bl matches the si",
-        "BL_COMPARISON",
-        "compare",
-        0.99,
-    ),
-    (
-        r"pl(?:ease|s) assist to check the draft bl against the si\b",
-        "BL_COMPARISON",
-        "compare",
-        0.99,
-    ),
-    (
-        r"please compare the si and draft bl\b",
-        "BL_COMPARISON",
-        "compare",
-        0.99,
-    ),
-    (
-        r"please find attached the si and the (?:commercial invoice|packing list|certificate of origin)\b"
-        r".{0,180}?confirm the bl is in order",
-        "BL_COMPARISON",
-        "compare",
-        0.99,
-    ),
-    (
-        r"attached si and draft bl\b.{0,180}?\bfor checking\b",
-        "BL_COMPARISON",
-        "compare",
-        0.99,
-    ),
+_SI_MENTION = re.compile(r"\b(?:si|shipping\s+instructions?)\b", re.IGNORECASE)
+_BL_MENTION = re.compile(
+    r"\b(?:draft(?:\s+(?:bl|bill\s+of\s+lading))?|bl|bill\s+of\s+lading)\b",
+    re.IGNORECASE,
+)
+_SEND_BL_FOR_REVIEW = re.compile(
+    r"\b(?:send|share|issue|provide|forward|release)\b"
+    r".{0,100}?\b(?:draft\s+)?(?:bl|bill\s+of\s+lading)\b"
+    r"(?:.{0,120}?\b(?:for|to)\s+(?:our\s+)?"
+    r"(?:check(?:ing)?|review|verification)\b"
+    r"|.{0,120}?\bso\s+(?:we|i)\s+can\s+(?:check|review|verify)\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+_RELATIONAL_COMPARE = re.compile(
+    r"\b(?:cross[\s-]?check|compare|reconcile)\b"
+    r"|\b(?:check|verify|validate)\b.{0,100}?\b(?:against|with)\b"
+    r"|\b(?:confirm|ensure|verify)\b.{0,140}?"
+    r"\b(?:match(?:es|ed)?|align(?:s|ed)?|agree(?:s|d)?|correspond(?:s|ed)?)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_DOCUMENT_REVIEW = re.compile(
+    r"\b(?:check(?:ing)?|verify|verification|confirm|validate|review)\b",
+    re.IGNORECASE,
 )
 
 _SI_REQUEST_RULES = _rules(
@@ -123,10 +101,18 @@ _SI_REQUEST_RULES = _rules(
         0.98,
     ),
     (
-        r"please (?:provide|issue|send|prepare) (?:the )?shipping instruction\b",
+        r"\b(?:provide|issue|send|share|prepare|forward)\s+"
+        r"(?:(?:me|us)\s+)?(?:the\s+)?(?:shipping\s+instructions?|si)\b",
         "SI_REQUEST",
         "request_si",
         0.96,
+    ),
+    (
+        r"\b(?:need|require|request)\b[^\r\n]{0,60}?"
+        r"\b(?:shipping\s+instructions?|si)\b",
+        "SI_REQUEST",
+        "request_si",
+        0.95,
     ),
 )
 
@@ -136,6 +122,19 @@ _INVOICE_RULES = _rules(
     (r"gr is still missing for invoice\s+\d+", "INVOICE_QUERY", "invoice", 0.99),
     (r"requesting to cancel invoice\s+\d+", "INVOICE_QUERY", "invoice", 0.99),
     (r"(?:credit|debit) note\b", "INVOICE_QUERY", "invoice", 0.95),
+    (
+        r"\b(?:question|query|clarify|explain|dispute)\b.{0,100}?"
+        r"\b(?:invoice|billing|charges?|fees?|surcharges?)\b",
+        "INVOICE_QUERY",
+        "invoice",
+        0.96,
+    ),
+    (
+        r"\b(?:cancel|correct|amend|reverse)\b.{0,80}?\binvoice\b",
+        "INVOICE_QUERY",
+        "invoice",
+        0.96,
+    ),
 )
 
 _GENERAL_RULES = _rules(
@@ -155,7 +154,6 @@ _GENERAL_RULES = _rules(
 
 _RULE_GROUPS: tuple[tuple[Rule, ...], ...] = (
     _SPAM_RULES,
-    _COMPARISON_RULES,
     _SI_REQUEST_RULES,
     _INVOICE_RULES,
     _GENERAL_RULES,
@@ -198,6 +196,35 @@ def _match_rules(text: str, groups: Sequence[Sequence[Rule]]) -> Classification 
     return None
 
 
+def _comparison_rule(text: str) -> Classification | None:
+    """Recognise the comparison meaning without requiring a fixed sentence."""
+    send_match = _SEND_BL_FOR_REVIEW.search(text)
+    if send_match is not None:
+        return Classification(
+            category="BL_COMPARISON",
+            intent="send_doc",
+            decided_by="rule",
+            confidence=0.98,
+            evidence=" ".join(send_match.group(0).split()),
+        )
+
+    # A comparison needs both document concepts. This guard stops phrases such
+    # as "verify the invoice" or "outstanding BL" becoming false positives.
+    if _SI_MENTION.search(text) is None or _BL_MENTION.search(text) is None:
+        return None
+
+    action_match = _RELATIONAL_COMPARE.search(text) or _DOCUMENT_REVIEW.search(text)
+    if action_match is None:
+        return None
+    return Classification(
+        category="BL_COMPARISON",
+        intent="compare",
+        decided_by="rule",
+        confidence=0.97,
+        evidence=" ".join(action_match.group(0).split()),
+    )
+
+
 def classify(email: Email, *, use_model: bool = True) -> Classification:
     """Rules first, model only on the residue. Never raises."""
     hit = classify_by_rule(email)
@@ -228,7 +255,14 @@ def classify_by_rule(email: Email) -> Classification | None:
     the model can decide, because a wrong rule is silent and a declined rule
     is measurable.
     """
-    return _match_rules(_current_message(email), _RULE_GROUPS)
+    text = _current_message(email)
+    spam = _match_rules(text, (_SPAM_RULES,))
+    if spam is not None:
+        return spam
+    comparison = _comparison_rule(text)
+    if comparison is not None:
+        return comparison
+    return _match_rules(text, _RULE_GROUPS[1:])
 
 
 def classify_by_model(email: Email) -> Classification:
