@@ -268,3 +268,32 @@ def test_model_reply_parsing_tolerates_fences_and_rejects_prose() -> None:
         except Exception:
             rejected = True
         assert rejected, junk
+
+
+# ---------------------------------------------------------------------------
+# PDF glyph interleaving. A long label that overflows into the value column
+# comes back with the two physically overlapping; no text extractor can
+# separate them. The danger is that the garbage still parses as a company
+# name, so a correct Bill of Lading gets reported as wrong.
+# ---------------------------------------------------------------------------
+def test_interleaved_pdf_label_is_detected_not_compared() -> None:
+    from core.parsers.pdf import _looks_interleaved
+
+    # real lines from the corpus: label "Notify Party/Intermediate Consignee"
+    # overlapping the values "KTP CO., LTD", "CERIEX" and "NAGAPPA EXPORTS"
+    for corrupt in (
+        "Party/Intermediate ConsKiTgPne CeO., LTD",
+        "Party/Intermediate ConsCigEnReIEeX",
+        "Party/Intermediate ConsNigAnGeAePPA EXPORTS",
+    ):
+        assert _looks_interleaved("notify", corrupt), corrupt
+
+    # ordinary values must never be mistaken for interleaving
+    for clean in (
+        "KTP CO., LTD",
+        "UAB NOVAKOPA",
+        "APRIL FINE PAPER TRADING (MIDDLE EAST) FZE",
+        "PARTNERS IN PAPER LLC",
+        "",
+    ):
+        assert not _looks_interleaved("notify", clean), clean

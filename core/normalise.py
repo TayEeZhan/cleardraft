@@ -26,6 +26,9 @@ from core.types import CompareField
 #: "MOORIM SP CO., LTD" vs "MOORIM SP CO LTD". Strip it everywhere, not just
 #: at the end, since it can appear mid-string before a suffix like "LTD".
 _ENTITY_PUNCT = re.compile(r"[.,]")
+#: Where a company name ends and its postal address begins. The renderers
+#: disagree on the separator, so all of them are cut here.
+_ENTITY_TAIL = re.compile(r"\s*[|\n\r]\s*")
 #: A trailing bracket is stripped ONLY when it holds something LOCODE-shaped:
 #: two letters then three alphanumerics, e.g. (MYPKG), (PECLL), (USNYC).
 #: Stripping ANY trailing bracket would be a silent killer. "NEW YORK (APM
@@ -93,7 +96,17 @@ def normalise_entity(value: str) -> str:
     text = _as_text(value)
     if text is None:
         return ""
-    s = text.upper()
+    # Compare the NAME only. Every renderer carries the postal address too,
+    # but each separates it differently, so comparing the whole cell makes the
+    # same company look like two:
+    #     .xlsx  "KTP CO., LTD | KTP BLDG., 36 SANGWON-GIL; SEOUL"
+    #     .docx  "KTP CO., LTD\nKTP BLDG., 36 SANGWON-GIL\nSEOUL"
+    #     .txt   "KTP CO., LTD"          (address on a continuation line)
+    # Cutting at the first separator gives all three the same answer. The
+    # address stays in FieldValue.value, so the review screen can still show
+    # the operator the full cell it was read from.
+    s = _ENTITY_TAIL.split(text, 1)[0]
+    s = s.upper()
     s = _ENTITY_PUNCT.sub("", s)
     s = _WHITESPACE.sub(" ", s).strip()
     return s

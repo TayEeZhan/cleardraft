@@ -22,15 +22,15 @@ Deadline: Tue 22 Sep 2026. Read `PLAN.md` first, then your own brief in
 ## Phase 1 — parallel build  (Mon 00:00-12:00)
 
 ### Sheng Kuan — see `docs/BRIEF_SHENG_KUAN.md`
-- [ ] `core/parsers/txt.py`
-- [ ] `core/parsers/xlsx.py`
-- [ ] `core/parsers/docx.py`
-- [ ] `core/parsers/pdf.py`
+- [x] `core/parsers/txt.py`
+- [x] `core/parsers/xlsx.py`
+- [x] `core/parsers/docx.py`
+- [x] `core/parsers/pdf.py`
 - [ ] Alias table extended beyond the generator's labels
-- [ ] `core/extract.py` with the verification gate
+- [x] `core/extract.py` with the verification gate
 
 ### Zi Qi — see `docs/BRIEF_ZI_QI.md`
-- [ ] `core/classify.py` rule tier
+- [x] `core/classify.py` rule tier (Zi Qi, PR #1)
 - [ ] Model fallback through `adapters/model.py`
 - [ ] Dev slice, confusion matrix, macro-F1, regression test
 - [ ] Unit tests for `core/normalise.py`
@@ -40,7 +40,7 @@ Deadline: Tue 22 Sep 2026. Read `PLAN.md` first, then your own brief in
 - [x] `core/compare.py`
 - [x] `core/decide.py` precedence ladder
 - [x] `core/reply.py`
-- [ ] `adapters/model.py` client
+- [x] `adapters/model.py` client
 
 **Validated 2026-09-20:** a throwaway parser feeding the real
 normalise/compare/decide path scored **84/84 exact defect-field match** on
@@ -48,9 +48,9 @@ every comparable .txt pair. The comparison engine is not the risk any more;
 extraction and classification are.
 
 ## Phase 2 — integration  (Mon 12:00-16:00)
-- [ ] Merge three branches
-- [ ] First full scoring run
-- [ ] Target: end-to-end rate above 0.90
+- [x] Merge Zi Qi PR #1
+- [x] First full scoring run
+- [x] Target: end-to-end rate above 0.90 -> reached 1.00
 
 ## Phase 3 — product  (Mon 16:00-22:00)
 - [ ] FastAPI service
@@ -73,3 +73,41 @@ extraction and classification are.
 - [ ] Project description
 - [ ] Prototype link
 - [ ] Public repository, ground-truth labels excluded
+
+
+---
+
+## Measured result, 2026-09-20
+
+Full 520-email run against the organiser's own scorer:
+
+```
+FINAL SCORE            1.0000
+  stage1 macro F1      1.0000   (weight 0.30)
+  stage3 defect F1     1.0000   (weight 0.20)
+  end-to-end rate      1.0000   (weight 0.50)   46/46 defects caught
+  escalation recall    1.0000
+  escalation precision 0.9091
+  decided by rule      100.0%
+```
+
+**Read this honestly.** It is a validation number on the one corpus we hold
+labels for, not evidence of generalisation. Two specific reasons to distrust it
+as a predictor of the final round:
+
+1. The classifier's rules match the generator's literal body templates. They
+   score 1.00 here by construction and will not transfer to rephrased email.
+   They decline rather than guess, so unmatched mail falls through to the model
+   tier - which is untested, because no API key has been configured yet.
+2. The parsers were built against these four renderers. The alias table covers
+   the labels this generator emits and little else.
+
+Escalation precision 0.9091 is not a defect: two SI PDFs have the notify-party
+label physically overlapping its value, so we escalate rather than compare
+garbage. Gold marks them OK because the underlying data matches - but we
+genuinely cannot read it.
+
+### What actually moves the number on unseen data
+- Alias coverage beyond this generator  (Sheng Kuan)
+- Intent-level classifier rules, not template matches  (Zi Qi)
+- An API key, so the model tier is exercised at all  (Ee Zhan)

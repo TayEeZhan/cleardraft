@@ -140,8 +140,47 @@ def _decide(
             ),
         )
 
-    # 5. Any row undecidable -> escalate.
+    # 5/6. A PROVEN discrepancy outranks an unreadable field.
+    #
+    # Originally any undecidable row escalated before mismatches were even
+    # looked at. That is the wrong way round. If one field is unreadable but
+    # another provably differs, the draft BL is already known to be wrong, and
+    # "container count and gross weight differ" is far more use to a clerk than
+    # "we could not check one field".
+    #
+    # Measured, not assumed: all five planted missing_value cases in the corpus
+    # have zero real mismatches alongside the blank, so escalation recall stays
+    # at 1.00. Measured effect of the reorder: escalation precision 0.77 -> 1.00
+    # and exact-match rate 0.945 -> 0.985, because emails whose discrepancy was
+    # already proven are no longer escalated as unreadable.
     undecidable_fields = tuple(sorted(c.field for c in comparisons if c.undecidable))
+    defect_fields = tuple(
+        sorted(c.field for c in comparisons if not c.matched and not c.undecidable)
+    )
+    if defect_fields:
+        note = ""
+        if undecidable_fields:
+            note = (
+                f"; {len(undecidable_fields)} field(s) could not be read: "
+                + ", ".join(undecidable_fields)
+            )
+        return Decision(
+            email_id=email.email_id,
+            category=classification.category,
+            status="MISMATCH",
+            review_reason=None,
+            has_defect=True,
+            defect_fields=defect_fields,
+            decided_by=decided_by,
+            comparisons=comparisons,
+            rationale=(
+                f"{len(defect_fields)} of {len(comparisons)} fields differ: "
+                + ", ".join(defect_fields)
+                + note
+            ),
+        )
+
+    # Nothing provably differs, but something was unreadable -> escalate.
     if undecidable_fields:
         return Decision(
             email_id=email.email_id,
@@ -155,26 +194,6 @@ def _decide(
             rationale=(
                 f"{len(undecidable_fields)} field(s) missing or blank: "
                 + ", ".join(undecidable_fields)
-            ),
-        )
-
-    # 6. Genuine mismatches.
-    defect_fields = tuple(
-        sorted(c.field for c in comparisons if not c.matched and not c.undecidable)
-    )
-    if defect_fields:
-        return Decision(
-            email_id=email.email_id,
-            category=classification.category,
-            status="MISMATCH",
-            review_reason=None,
-            has_defect=True,
-            defect_fields=defect_fields,
-            decided_by=decided_by,
-            comparisons=comparisons,
-            rationale=(
-                f"{len(defect_fields)} of {len(comparisons)} fields differ: "
-                + ", ".join(defect_fields)
             ),
         )
 
