@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "web/**",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/index.py"
+    },
+    {
+      "src": "/public/(.*)",
+      "dest": "/web/public/$1"
+    },
+    {
+      "src": "/(.*\\..*)",
+      "dest": "/web/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/web/index.html"
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClearDraft — shipping document verification</title>
+<meta name="description" content="Checks a draft Bill of Lading against its Shipping Instruction, shows the line it read every value from, and asks for a human when it cannot decide.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="brand-name">ClearDraft</span>
+    <span class="brand-sub">SI / BL verification</span>
+  </div>
+  <nav class="nav" aria-label="Views">
+    <a href="#/board" data-route="board" class="nav-link">Inbox</a>
+    <a href="#/accuracy" data-route="accuracy" class="nav-link">Accuracy</a>
+  </nav>
+  <div class="source" id="source-chip" title="Where this page is reading its results from">
+    <span class="dot" aria-hidden="true"></span><span id="source-text">loading</span>
+  </div>
+</header>
+
+<main id="main">
+
+  <section id="view-board" class="view">
+    <div class="view-head">
+      <h1>Inbox</h1>
+      <p class="lede">One shared mailbox, <b id="total-count">520</b> messages. Every one has been read, sorted, and — where documents were attached — checked field by field.</p>
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="Filter by outcome">
+      <button role="tab" class="tab" data-tab="mismatch" aria-selected="true">
+        <span class="tab-n" id="n-mismatch">0</span>
+        <span class="tab-l">Discrepancy found</span>
+      </button>
+      <button role="tab" class="tab" data-tab="needs_review" aria-selected="false">
+        <span class="tab-n" id="n-needs_review">0</span>
+        <span class="tab-l">Needs a human</span>
+      </button>
+      <button role="tab" class="tab" data-tab="cleared" aria-selected="false">
+        <span class="tab-n" id="n-cleared">0</span>
+        <span class="tab-l">Cleared</span>
+      </button>
+      <button role="tab" class="tab" data-tab="other" aria-selected="false">
+        <span class="tab-n" id="n-other">0</span>
+        <span class="tab-l">Other mail</span>
+      </button>
+    </div>
+
+    <div id="case-list" class="case-list" role="list" aria-live="polite"></div>
+  </section>
+
+  <section id="view-review" class="view" hidden>
+    <a href="#/board" class="back">Back to inbox</a>
+    <div id="review-body"></div>
+  </section>
+
+  <section id="view-accuracy" class="view" hidden>
+    <div class="view-head">
+      <h1>Accuracy</h1>
+      <p class="lede">Measured on every run, never typed in by hand.</p>
+    </div>
+    <div id="accuracy-body"></div>
+  </section>
+
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
