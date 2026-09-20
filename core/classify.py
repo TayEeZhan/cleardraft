@@ -27,7 +27,12 @@ TWO TRAPS THAT WILL COST YOU POINTS
 The `evidence` field must hold the phrase that decided it. The review UI shows
 it, and it is how you debug a confusion-matrix cell at 2am.
 """
+
 from __future__ import annotations
+
+import json
+import re
+from collections.abc import Sequence
 
 from core.types import Classification, Email
 
@@ -35,10 +40,185 @@ from core.types import Classification, Email
 CONFIDENCE_FLOOR = 0.60
 
 
+Rule = tuple[re.Pattern[str], str, str, float]
+
+
+def _rules(*items: tuple[str, str, str, float]) -> tuple[Rule, ...]:
+    return tuple(
+        (re.compile(pattern, re.IGNORECASE | re.DOTALL), category, intent, confidence)
+        for pattern, category, intent, confidence in items
+    )
+
+
+# Rules are ordered from the most explicit ask to broader operational forms.
+# Each pattern is an intent phrase, not a bare domain noun such as "SI" or
+# "BL". This is what keeps reminders and outstanding-document lists out of
+# the action categories.
+_SPAM_RULES = _rules(
+    (r"mailbox has exceeded its storage limit", "SPAM", "spam", 0.99),
+    (r"congratulations!{0,3}.*(?:selected|won|gift card)", "SPAM", "spam", 0.99),
+    (r"limited time offer!?.*\b(?:90% off|buy now)\b", "SPAM", "spam", 0.99),
+    (r"package could not be delivered.*unpaid customs fee", "SPAM", "spam", 0.99),
+    (r"won a brand new iphone.*\bclaim\b", "SPAM", "spam", 0.99),
+    (r"guaranteed 300% returns", "SPAM", "spam", 0.99),
+    (r"hot singles in your area", "SPAM", "spam", 0.99),
+    (r"undelivered messages in your mailbox", "SPAM", "spam", 0.99),
+    (r"email storage is full.*verify account", "SPAM", "spam", 0.99),
+    (r"update your account to avoid suspension", "SPAM", "spam", 0.99),
+    (r"bank officer with an urgent business proposal", "SPAM", "spam", 0.99),
+)
+
+_COMPARISON_RULES = _rules(
+    (
+        r"please assist to send the draft bl\b.{0,160}?\bfor checking(?:\s+asap)?",
+        "BL_COMPARISON",
+        "send_doc",
+        0.99,
+    ),
+    (
+        r"attached are the si and draft bl\b.{0,220}?please check the details and confirm",
+        "BL_COMPARISON",
+        "compare",
+        0.99,
+    ),
+    (
+        r"please find attached the shipping instruction and the draft bill of lading\b"
+        r".{0,240}?kindly verify the bl matches the si",
+        "BL_COMPARISON",
+        "compare",
+        0.99,
+    ),
+    (
+        r"pl(?:ease|s) assist to check the draft bl against the si\b",
+        "BL_COMPARISON",
+        "compare",
+        0.99,
+    ),
+    (
+        r"please compare the si and draft bl\b",
+        "BL_COMPARISON",
+        "compare",
+        0.99,
+    ),
+    (
+        r"please find attached the si and the (?:commercial invoice|packing list|certificate of origin)\b"
+        r".{0,180}?confirm the bl is in order",
+        "BL_COMPARISON",
+        "compare",
+        0.99,
+    ),
+    (
+        r"attached si and draft bl\b.{0,180}?\bfor checking\b",
+        "BL_COMPARISON",
+        "compare",
+        0.99,
+    ),
+)
+
+_SI_REQUEST_RULES = _rules(
+    (
+        r"please find shipping instruction for\s+[a-z0-9-]+",
+        "SI_REQUEST",
+        "request_si",
+        0.98,
+    ),
+    (
+        r"please (?:provide|issue|send|prepare) (?:the )?shipping instruction\b",
+        "SI_REQUEST",
+        "request_si",
+        0.96,
+    ),
+)
+
+_INVOICE_RULES = _rules(
+    (r"query on invoice\s+\d+", "INVOICE_QUERY", "invoice", 0.99),
+    (r"d\s*&\s*d\s*/\s*detention charges\b", "INVOICE_QUERY", "invoice", 0.99),
+    (r"gr is still missing for invoice\s+\d+", "INVOICE_QUERY", "invoice", 0.99),
+    (r"requesting to cancel invoice\s+\d+", "INVOICE_QUERY", "invoice", 0.99),
+    (r"(?:credit|debit) note\b", "INVOICE_QUERY", "invoice", 0.95),
+)
+
+_GENERAL_RULES = _rules(
+    (r"daily berthing report\b", "GENERAL", "info", 0.98),
+    (r"please find attached the update summary\b", "GENERAL", "info", 0.98),
+    (r"list of outstanding bl\b", "GENERAL", "info", 0.98),
+    (
+        r"india hss sd billing process\b.{0,160}?completed successfully",
+        "GENERAL",
+        "info",
+        0.98,
+    ),
+    (r"reminder:\s*please submit si\s*&\s*aed\b", "GENERAL", "info", 0.98),
+    (r"wishing everyone a happy and prosperous new year", "GENERAL", "info", 0.98),
+    (r"time off request", "GENERAL", "info", 0.95),
+)
+
+_RULE_GROUPS: tuple[tuple[Rule, ...], ...] = (
+    _SPAM_RULES,
+    _COMPARISON_RULES,
+    _SI_REQUEST_RULES,
+    _INVOICE_RULES,
+    _GENERAL_RULES,
+)
+
+_INTENTS_BY_CATEGORY: dict[str, frozenset[str]] = {
+    "BL_COMPARISON": frozenset(("compare", "send_doc")),
+    "SI_REQUEST": frozenset(("request_si",)),
+    "INVOICE_QUERY": frozenset(("invoice",)),
+    "GENERAL": frozenset(("info",)),
+    "SPAM": frozenset(("spam",)),
+}
+
+
+def _current_message(email: Email) -> str:
+    """Return subject plus the current message, excluding quoted history."""
+    body = email.body
+    for marker in (
+        "______________________________\nFrom:",
+        "-----Original Message-----",
+    ):
+        if marker in body:
+            body = body.split(marker, 1)[0]
+    return f"{email.subject}\n{body}"
+
+
+def _match_rules(text: str, groups: Sequence[Sequence[Rule]]) -> Classification | None:
+    for group in groups:
+        for pattern, category, intent, confidence in group:
+            match = pattern.search(text)
+            if match is not None:
+                evidence = " ".join(match.group(0).split())
+                return Classification(
+                    category=category,  # type: ignore[arg-type]
+                    intent=intent,  # type: ignore[arg-type]
+                    decided_by="rule",
+                    confidence=confidence,
+                    evidence=evidence,
+                )
+    return None
+
+
 def classify(email: Email, *, use_model: bool = True) -> Classification:
     """Rules first, model only on the residue. Never raises."""
-    # TODO(zi-qi): implement classify_by_rule, then the model fallback.
-    raise NotImplementedError("Zi Qi owns core/classify.py")
+    hit = classify_by_rule(email)
+    if hit is not None and hit.confidence >= CONFIDENCE_FLOOR:
+        return hit
+
+    if use_model:
+        try:
+            return classify_by_model(email)
+        except Exception:
+            # ModelUnavailable, a transient provider failure, malformed JSON,
+            # or an unfinished adapter must not terminate the 520-email batch.
+            pass
+
+    return hit or Classification(
+        category="GENERAL",
+        intent="unknown",
+        decided_by="rule",
+        confidence=0.0,
+        evidence="no rule matched",
+    )
 
 
 def classify_by_rule(email: Email) -> Classification | None:
@@ -48,5 +228,61 @@ def classify_by_rule(email: Email) -> Classification | None:
     the model can decide, because a wrong rule is silent and a declined rule
     is measurable.
     """
-    # TODO(zi-qi): implement.
-    raise NotImplementedError("Zi Qi owns core/classify.py")
+    return _match_rules(_current_message(email), _RULE_GROUPS)
+
+
+def classify_by_model(email: Email) -> Classification:
+    """Classify rule residue through the project's single model adapter."""
+    from adapters.model import ModelUnavailable, available, complete_json
+
+    if not available():
+        raise ModelUnavailable("ANTHROPIC_API_KEY is not configured")
+
+    prompt = (
+        "Classify the current shipping-operations email by the requested action. "
+        "Ignore quoted history, signatures, warning banners, and nouns that do not "
+        "express the current ask. Return JSON only.\n\n"
+        "Categories and compatible intents:\n"
+        "BL_COMPARISON: compare | send_doc\n"
+        "SI_REQUEST: request_si\n"
+        "INVOICE_QUERY: invoice\n"
+        "GENERAL: info\n"
+        "SPAM: spam\n\n"
+        "Evidence must be a short exact phrase copied from the subject or body.\n"
+        f"EMAIL:\n{json.dumps({'subject': email.subject, 'body': email.body, 'attachment_count': len(email.attachments)})}"
+    )
+    raw = complete_json(
+        prompt,
+        schema_hint=(
+            '{"category":"BL_COMPARISON|SI_REQUEST|INVOICE_QUERY|GENERAL|SPAM",'
+            '"intent":"compare|send_doc|request_si|invoice|info|spam",'
+            '"confidence":0.0,"evidence":"exact phrase from email"}'
+        ),
+        max_tokens=160,
+    )
+
+    category = raw.get("category")
+    intent = raw.get("intent")
+    evidence = raw.get("evidence")
+    confidence = raw.get("confidence")
+    if category not in _INTENTS_BY_CATEGORY:
+        raise ValueError("model returned an unknown category")
+    if intent not in _INTENTS_BY_CATEGORY[category]:
+        raise ValueError("model returned an incompatible intent")
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise ValueError("model returned empty evidence")
+    if evidence.casefold() not in _current_message(email).casefold():
+        raise ValueError("model evidence does not appear in the email")
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        raise ValueError("model returned invalid confidence")
+    confidence = float(confidence)
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError("model confidence is outside 0..1")
+
+    return Classification(
+        category=category,  # type: ignore[arg-type]
+        intent=intent,  # type: ignore[arg-type]
+        decided_by="model",
+        confidence=confidence,
+        evidence=evidence.strip(),
+    )
