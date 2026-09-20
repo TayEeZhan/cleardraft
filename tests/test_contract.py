@@ -217,3 +217,54 @@ def test_reply_recovers_the_reference_from_the_body() -> None:
         body="Hi Mitchelle, attached are the SI and draft BL for OC 5ALT-01226.",
     )
     assert _reference(email) == "5ALT-01226"
+
+
+# ---------------------------------------------------------------------------
+# The single model door (ADR-004). Every model call in the system passes
+# through adapters/model.py, so "N% of decisions were made by a rule" is only
+# defensible if this is the one entry point and it fails loudly.
+# ---------------------------------------------------------------------------
+def test_model_client_is_not_a_stub() -> None:
+    """Regression: complete_json raised NotImplementedError, so the entire
+    model fallback was dead. Rules covered this dataset, so nothing failed -
+    it would only have surfaced on unseen data, which is the final round."""
+    import inspect
+
+    from adapters import model as model_mod
+
+    src = inspect.getsource(model_mod.complete_json)
+    assert "NotImplementedError" not in src
+
+
+def test_model_absence_raises_model_unavailable_not_a_guess() -> None:
+    """With no key the pipeline must escalate, never invent an answer."""
+    import os
+
+    from adapters.model import ModelUnavailable, complete_json
+
+    saved = os.environ.pop("ANTHROPIC_API_KEY", None)
+    try:
+        raised = False
+        try:
+            complete_json("anything", schema_hint="{}")
+        except ModelUnavailable:
+            raised = True
+        assert raised, "missing key must raise ModelUnavailable"
+    finally:
+        if saved is not None:
+            os.environ["ANTHROPIC_API_KEY"] = saved
+
+
+def test_model_reply_parsing_tolerates_fences_and_rejects_prose() -> None:
+    from adapters.model import _extract_json
+
+    assert _extract_json(chr(123) + chr(34) + "category" + chr(34) + ":" + chr(34) + "SPAM" + chr(34) + chr(125)) == {"category": "SPAM"}
+    fenced = "```json" + chr(10) + chr(123) + chr(34) + "category" + chr(34) + ":" + chr(34) + "GENERAL" + chr(34) + chr(125) + chr(10) + "```"
+    assert _extract_json(fenced) == {"category": "GENERAL"}
+    for junk in ("I cannot help with that.", "[1,2,3]", ""):
+        rejected = False
+        try:
+            _extract_json(junk)
+        except Exception:
+            rejected = True
+        assert rejected, junk

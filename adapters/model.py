@@ -13,6 +13,7 @@ nothing here.
 """
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -51,12 +52,100 @@ class ModelUnavailable(RuntimeError):
     """
 
 
+def _load_dotenv() -> None:
+    """Read .env into the environment if present. No extra dependency.
+
+    Existing environment variables win, so an explicitly exported key is never
+    silently overridden by a stale file.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, ".env")
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        # A malformed or unreadable .env must not take the pipeline down. The
+        # caller sees ModelUnavailable and falls back to the rule tier.
+        return
+
+
 def available() -> bool:
+    _load_dotenv()
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
+def _extract_json(text: str) -> dict:
+    """Pull a JSON object out of the reply, tolerating a markdown fence."""
+    body = text.strip()
+    if body.startswith("```"):
+        body = body[3:]
+        if body.lstrip().lower().startswith("json"):
+            body = body.lstrip()[4:]
+        if "```" in body:
+            body = body[: body.rfind("```")]
+    start, end = body.find("{"), body.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("model reply contained no JSON object")
+    parsed = json.loads(body[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("model reply was not a JSON object")
+    return parsed
+
+
 def complete_json(prompt: str, *, schema_hint: str, max_tokens: int = 512) -> dict:
-    """Ask the model for a small JSON object. Never returns free text."""
-    # TODO(ee-zhan): anthropic SDK call, json parse, STATS update, retry once
-    # on transient error, raise ModelUnavailable when no key.
-    raise NotImplementedError
+    """Ask the model for a small JSON object. Never returns free text.
+
+    Raises ModelUnavailable when there is no key, no SDK, or the call fails
+    after one retry. Callers MUST treat that as "escalate", never as a guess.
+    One retry only: this runs over 520 emails, and a long backoff chain would
+    turn a provider blip into a stalled batch.
+    """
+    if not available():
+        raise ModelUnavailable("ANTHROPIC_API_KEY is not configured")
+    try:
+        import anthropic
+    except ImportError as exc:
+        raise ModelUnavailable(f"anthropic SDK not installed: {exc}") from exc
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    system = (
+        "You extract structured data from shipping operations email. "
+        "Reply with one JSON object and nothing else. No prose, no markdown. "
+        f"Required shape: {schema_hint}"
+    )
+
+    last: "Exception | None" = None
+    for attempt in (1, 2):
+        try:
+            resp = client.messages.create(
+                model=MODEL,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            STATS.calls += 1
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                STATS.input_tokens += getattr(usage, "input_tokens", 0) or 0
+                STATS.output_tokens += getattr(usage, "output_tokens", 0) or 0
+            text = "".join(
+                getattr(block, "text", "") for block in getattr(resp, "content", [])
+            )
+            return _extract_json(text)
+        except Exception as exc:  # provider error, timeout, or unparseable reply
+            last = exc
+            if attempt == 2:
+                break
+
+    STATS.failures += 1
+    raise ModelUnavailable(f"model call failed after retry: {last}") from last
