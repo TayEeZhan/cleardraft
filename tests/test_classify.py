@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from adapters import model
 from core.classify import classify, classify_by_model, classify_by_rule
 from core.types import Email
 
@@ -118,6 +121,59 @@ def test_send_doc_and_compare_share_category_but_not_intent() -> None:
     assert compare.intent == "compare"
 
 
+@pytest.mark.parametrize(
+    "body",
+    (
+        "Could you cross-check the draft BL with the shipping instructions?",
+        "Kindly verify this bill of lading against the SI before release.",
+        "Please confirm the draft BL matches our shipping instruction.",
+        "Please confirm the draft matches the SI before we approve it.",
+        "Can you validate the SI with the draft bill of lading?",
+        "Review the attached shipping instructions and BL, then confirm.",
+    ),
+)
+def test_comparison_rules_recognise_rephrased_meaning(body: str) -> None:
+    result = classify_by_rule(email("Document review", body))
+
+    assert result is not None
+    assert result.category == "BL_COMPARISON"
+    assert result.intent == "compare"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        "Would you share the draft bill of lading for our review?",
+        "Please forward the BL to us for verification.",
+        "Can you provide the draft BL so we can review it?",
+    ),
+)
+def test_send_document_rules_recognise_rephrased_meaning(body: str) -> None:
+    result = classify_by_rule(email("Draft document", body))
+
+    assert result is not None
+    assert result.category == "BL_COMPARISON"
+    assert result.intent == "send_doc"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    (
+        ("Could you share the shipping instructions for booking 42?", "SI_REQUEST"),
+        ("We need the SI for tomorrow's shipment.", "SI_REQUEST"),
+        ("Can you explain this detention charge?", "INVOICE_QUERY"),
+        ("Please correct invoice 8341 before payment.", "INVOICE_QUERY"),
+    ),
+)
+def test_other_action_rules_recognise_rephrased_meaning(
+    body: str, expected: str
+) -> None:
+    result = classify_by_rule(email("Operations question", body))
+
+    assert result is not None
+    assert result.category == expected
+
+
 def test_quoted_history_does_not_override_current_request() -> None:
     result = classify_by_rule(
         email(
@@ -165,6 +221,50 @@ def test_valid_model_fallback_is_accepted() -> None:
     assert result.evidence == "operational update"
 
 
+def test_unmatched_email_is_sorted_by_model_instead_of_general_default() -> None:
+    message = email(
+        "Accounts payable discrepancy",
+        "Our payable total looks wrong. Could someone investigate?",
+    )
+    model_result = {
+        "category": "INVOICE_QUERY",
+        "intent": "invoice",
+        "confidence": 0.91,
+        "evidence": "payable total",
+    }
+
+    assert classify_by_rule(message) is None
+    with (
+        patch("adapters.model.available", return_value=True),
+        patch("adapters.model.complete_json", return_value=model_result) as complete,
+    ):
+        result = classify(message)
+
+    complete.assert_called_once()
+    assert result.category == "INVOICE_QUERY"
+    assert result.intent == "invoice"
+    assert result.decided_by == "model"
+
+
+@pytest.mark.skipif(
+    not model.available(),
+    reason="ANTHROPIC_API_KEY is not configured; live model test is opt-in",
+)
+def test_live_model_sorts_rule_residue() -> None:
+    """Exercise the real adapter automatically once a model key is present."""
+    message = email(
+        "Accounts payable discrepancy",
+        "Our payable total looks wrong. Could someone investigate?",
+    )
+
+    assert classify_by_rule(message) is None
+    result = classify(message)
+
+    assert result.category == "INVOICE_QUERY"
+    assert result.intent == "invoice"
+    assert result.decided_by == "model"
+
+
 def test_model_evidence_must_appear_in_source() -> None:
     message = email("Question", "Could you review this operational update?")
     invented = {
@@ -187,12 +287,12 @@ def test_model_evidence_must_appear_in_source() -> None:
 
 
 def test_model_category_and_intent_must_agree() -> None:
-    message = email("Question", "Please review the invoice question.")
+    message = email("Question", "Please review the payment concern.")
     incompatible = {
         "category": "INVOICE_QUERY",
         "intent": "compare",
         "confidence": 0.9,
-        "evidence": "invoice question",
+        "evidence": "payment concern",
     }
 
     with (
