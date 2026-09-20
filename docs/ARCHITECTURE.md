@@ -1,0 +1,374 @@
+# ClearDraft — System Design
+
+Rubric criterion 2, Architecture and Scalability, 15 points. Judges assess
+*"component structure, data flow, dependencies and ability to grow"* and
+award the top band for *"well-justified architecture with clear trade-offs and
+a realistic scaling approach, supported by the implementation."*
+
+This document states the decisions and the trade-offs. Every claim in it
+points at a file you can open.
+
+---
+
+## 1. The one-sentence design
+
+**A deterministic pipeline that calls a language model only where determinism
+cannot reach, and verifies every model output against the source document
+before accepting it.**
+
+Everything below follows from that sentence.
+
+---
+
+## 2. Context
+
+```
+   +---------------+        +--------------------+       +---------------+
+   | Shipping desk |  reads | ClearDraft         | calls | Anthropic API |
+   | operator      |<------>| classify, extract, |------>| Haiku 4.5     |
+   |               | acts   | compare, escalate  |       +---------------+
+   +---------------+        +---------+----------+
+                                      | reads
+                            +---------v----------+
+                            | Shared mailbox     |
+                            | 520 emails,        |
+                            | 250 attachments    |
+                            +--------------------+
+```
+
+The operator is the only actor who takes an irreversible action. ClearDraft
+drafts a reply; the operator presses Send. That boundary is deliberate and it
+is enforced in code, not in policy: `core/reply.py` renders text and returns
+it. Nothing in the repository can send mail.
+
+---
+
+## 3. Containers
+
+```
+  +----------------------------------------------------------------+
+  |  web/         Next.js on Vercel                                 |
+  |               board, review screen, accuracy screen             |
+  +--------------------------------+-------------------------------+
+                                   | HTTPS, JSON
+  +--------------------------------v-------------------------------+
+  |  api/         FastAPI on Render                                 |
+  |               thin transport layer, no business logic           |
+  +--------------------------------+-------------------------------+
+                                   | in-process calls
+  +--------------------------------v-------------------------------+
+  |  core/        the pipeline. Pure functions. No I/O.             |
+  +--------------------------------+-------------------------------+
+                                   | injected callables
+  +--------------------------------v-------------------------------+
+  |  adapters/    inbox sources, model client, cache                |
+  +----------------------------------------------------------------+
+```
+
+`core/` does not import `adapters/`. The dependency arrow points one way, into
+the core. That is what lets `tests/test_contract.py` exercise the whole
+pipeline without a network, an API key or a dataset.
+
+---
+
+## 4. Components and data flow
+
+One immutable record is threaded through five stages. Each stage is a pure
+function. Each returns a frozen dataclass from `core/types.py`.
+
+```
+  Email                         adapters/inbox.py      LocalInbox.emails()
+    |
+    v
+  Classification                core/classify.py       Zi Qi
+    |  category + intent + decided_by + evidence
+    |
+    +-- not BL_COMPARISON ------------------------> Decision(OK)
+    |
+    v
+  ExtractedDoc x 2              core/extract.py        Sheng Kuan
+    |  per field: value, raw line, line number, label
+    |  model fallback gated by verify_against_source()
+    |
+    v
+  FieldComparison x 7           core/compare.py        Ee Zhan
+    |  normalise both sides, then exact equality
+    |
+    v
+  Decision                      core/decide.py         Ee Zhan
+       status, review_reason, defect_fields, rationale
+```
+
+The orchestrator is `core/pipeline.py:process`. It receives every stage as a
+callable rather than importing it:
+
+```python
+process(email, classify=..., read_doc=..., compare=..., decide=...)
+```
+
+Three things fall out of that signature, and each maps to a scored criterion:
+
+| Consequence | Criterion it serves |
+|---|---|
+| Any stage can be stubbed, so tests need no dataset | Engineering Quality |
+| Three people build three stages against one contract | delivered on time |
+| A stage can move to a remote service without touching the orchestrator | Architecture and Scalability |
+
+`scripts/run_pipeline.py` demonstrates the first point today: unimplemented
+stages fall back to a safe default and are counted, so the plumbing was
+provably correct before any feature code existed.
+
+---
+
+## 5. Design decisions and their trade-offs
+
+### ADR-001 — Comparison is deterministic. The model never decides a mismatch.
+
+**Decision.** `core/compare.py` normalises both values and tests equality. No
+model call, no similarity threshold.
+
+**Why.** We read the organiser's generator. Every planted defect is
+substantive: a different company, a different port, a count differing by at
+least one, a weight differing by at least 500 kg. There is no case in the
+problem where two values differ cosmetically and should still be called a
+mismatch.
+
+**Trade-off we accept.** A genuinely ambiguous pair, say a legal name that
+changed spelling between documents, produces a false positive. We accept that
+because a false positive costs one operator glance, while a fuzzy threshold
+that swallows a real defect costs a reissued Bill of Lading. The asymmetry is
+not close.
+
+**Rejected alternative.** Feed both documents to a model and ask "do these
+match?". Cheaper to write, impossible to audit, non-reproducible run to run,
+and it puts the 50% metric at the mercy of sampling.
+
+### ADR-002 — Ports and adapters for document formats.
+
+**Decision.** `core/parsers/__init__.py` defines a `DocumentParser` protocol
+and a registry. Each format is one adapter module.
+
+**Why.** The dataset has four formats today. A real shipping desk has more,
+and Idea 5 (checking the commercial invoice, packing list and certificate of
+origin against each other) needs several more. Adding a format must be an
+additive change.
+
+**Trade-off.** One indirection layer for four implementations is mild
+over-engineering at today's size. It pays for itself the first time a format
+is added, which we expect in the final round.
+
+**Evidence.** `for_path()` dispatches on extension; no core module names a
+format.
+
+### ADR-003 — Every extracted value carries its provenance.
+
+**Decision.** `FieldValue` is `{value, raw, line_no, label, decided_by}`, not
+a bare string.
+
+**Why.** It buys two separate things from one field.
+1. The review screen can show the operator the exact source line. That is the
+   "shows its proof" feature, and it is what makes an operator trust the tool
+   on day one rather than re-reading both documents anyway.
+2. `verify_against_source()` can check a model's answer against the document
+   text. Without the text we would have to take the model's word.
+
+**Trade-off.** Roughly four times the memory per field. At 250 documents that
+is irrelevant. At ten million it would need a content-addressed blob store,
+which is noted in section 7 and not built.
+
+### ADR-004 — Two tiers with a verification gate, not one model call.
+
+**Decision.** Rules run first and set `decided_by="rule"`. The model runs only
+on what rules could not resolve. Any model answer that does not appear
+verbatim in the source document is discarded and the email escalates.
+
+**Why.** This is the direct answer to "how do you stop the model inventing
+things". It is a structural answer rather than a prompt-engineering one. A
+model cannot return a consignee that is not on the page, because the gate
+compares its answer to the page.
+
+**Trade-off.** The gate rejects correct-but-reworded answers, for example a
+model that expands "CO., LTD" to "COMPANY LIMITED". Those become escalations
+rather than silent corrections. We prefer an escalation to a silent rewrite of
+a legal party name.
+
+**Evidence.** `core/extract.py:verify_against_source`, and `adapters/model.py`
+is the single door every model call passes through, so the counters in
+`ModelStats` are complete by construction.
+
+### ADR-005 — Intent is modelled separately from category.
+
+**Decision.** `Classification` carries both `category` and `intent`.
+
+**Why.** They diverge, and the divergence is worth 91 emails. "Please send the
+draft BL for checking" and "Please compare the attached SI and BL" are both
+category `BL_COMPARISON`. Only the second one should escalate when attachments
+are absent. 94 of the 220 comparison emails have no attachments and 91 of them
+are ground-truth `OK`. A system that keys escalation off category alone
+escalates all 94 and drops escalation precision from roughly 1.0 to 0.05.
+
+**Trade-off.** Two labels to get right instead of one. Worth it.
+
+### ADR-006 — Stateless, per-email independent processing.
+
+**Decision.** `process()` holds no state between emails. Nothing is shared
+except read-only tables.
+
+**Why.** It makes the workload embarrassingly parallel, which is the whole
+scaling story in section 7. It also makes a failed email a failed email rather
+than a failed batch.
+
+**Trade-off.** Cross-email intelligence, such as grouping every message about
+one shipment into a timeline, needs a store we have not built. Noted as a
+roadmap item; the product document already flags that this dataset gives every
+email a distinct shipment, so the timeline could not be demonstrated anyway.
+
+### ADR-007 — The inbox is a port.
+
+**Decision.** `adapters/inbox.py` defines `InboxSource`. `LocalInbox` reads a
+folder. A Microsoft Graph or IMAP adapter is the same interface.
+
+**Why.** "This could run against a real shared mailbox" is a claim judges hear
+from every team. It is credible only if the seam exists. It exists.
+
+---
+
+## 6. Failure modes
+
+The system has one rule: **it never produces a confident wrong answer.** Every
+failure path converges on escalation to a person.
+
+| Failure | Detected by | Result |
+|---|---|---|
+| Corrupt or truncated PDF | parser try/except | `NEEDS_REVIEW / unreadable` |
+| Image-only scan, no text layer | text length check | `NEEDS_REVIEW / unreadable` |
+| Attachment is an invoice, not an SI | document signature test | `NEEDS_REVIEW / wrong_doc_type` |
+| Comparison requested, no attachments | intent plus attachment count | `NEEDS_REVIEW / missing_attachment` |
+| Field present but blank (`???`, `TBA`) | `aliases.is_blank` | `NEEDS_REVIEW / missing_value` |
+| Label we have never seen | alias lookup returns None | field missing, escalate |
+| Model returns an invented value | `verify_against_source` | value discarded, escalate |
+| Model API down or no key | `ModelUnavailable` | rule tier only, escalate on gaps |
+| New document format | no adapter registered | `kind="OTHER"`, escalate |
+
+Two invariants enforce this, and both are checkable by reading the code:
+
+1. **No parser raises.** `DocumentParser.parse` returns an unreadable document
+   instead. One corrupt PDF must not end a 520-email batch.
+2. **No `except: pass` anywhere.** Every caught exception either escalates or
+   is recorded in `ModelStats.failures`. The `ecc:silent-failure-hunter` agent
+   runs against this repository specifically to enforce it, because a pipeline
+   whose promise is "it escalates instead of guessing" is falsified by a single
+   swallowed error.
+
+---
+
+## 7. Scaling
+
+### Where the time goes
+
+The rule path is string operations over a file that is a few kilobytes. It is
+sub-millisecond per field. The model path is a network round trip, roughly two
+to three orders of magnitude slower. So throughput is set almost entirely by
+**what fraction of work reaches the model**, which is exactly the quantity
+`rule_pct` measures and the accuracy screen displays.
+
+### Scaling axes, cheapest first
+
+1. **Raise the rule hit rate.** Every alias Sheng Kuan adds removes model
+   calls permanently. This is the cheapest scaling lever in the system and it
+   costs no infrastructure.
+2. **Layout Memory** (Idea 4, final round). Hash the ordered list of labels in
+   a document to get a layout fingerprint. On a repeat fingerprint, apply the
+   stored field map directly: no model call, deterministic, instant. A shipping
+   desk sees the same handful of carrier templates every day, so the
+   fingerprint cache converges fast. The interface for this already exists:
+   `ModelStats.cache_hits` has a home for the number.
+3. **Horizontal workers.** ADR-006 makes emails independent, so a process pool
+   scales linearly to the core count and a queue plus stateless workers scales
+   past one machine. Nothing in `core/` would change.
+4. **Batch the tail.** Remaining model calls are independent and can be issued
+   concurrently rather than serially.
+
+### Where it would break, honestly
+
+| Limit | Symptom | Fix |
+|---|---|---|
+| Model rate limit | throughput ceiling under burst | queue plus backoff; escalate on timeout rather than block |
+| Documents held in memory | large scanned PDFs | stream to a blob store, keep only the text |
+| Single-process run | one core only | worker pool, then a queue |
+| Cross-email features | not possible today | a shipment store, keyed on the OC reference |
+
+We have not built the queue or the blob store. Saying so is the point: the
+rubric rewards *"clear trade-offs and a realistic scaling approach"*, not a
+claim to have solved problems we do not have at 520 emails.
+
+### The cost argument
+
+Cost is proportional to model calls, and model calls are what the rule tier and
+the layout cache remove. The harness instruments this directly rather than
+estimating it: `ModelStats` counts calls, tokens and cache hits per run, and
+the accuracy screen reports them. The claim we make on the slide is whatever
+that counter actually says after a full 520-email run, not a projection.
+
+---
+
+## 8. Security
+
+| Concern | Control |
+|---|---|
+| API key leakage | `.env` gitignored; `.env.example` holds a placeholder; `ecc:security-reviewer` runs before the repository goes public |
+| Ground-truth labels | `.secrets/` is the first entry in `.gitignore`, committed before any other file. Verified with `git check-ignore`. See PLAN.md section 8 |
+| Untrusted document content | documents are parsed as data. No `eval`, no shell, no deserialisation of document content |
+| Prompt injection from an email body | the model never receives authority to act. Its only outputs are a category label and a field value, and the field value must survive `verify_against_source` |
+| Sending mail | not implemented anywhere. The system drafts; a person sends |
+
+---
+
+## 9. Testing strategy
+
+Three layers, deliberately separated so that a failure tells you where to look.
+
+| Layer | File | Asks |
+|---|---|---|
+| Contract | `tests/test_contract.py` | Does the plumbing hold? Submission shape, alias table unambiguous, CJK labels resolve, 520 emails parse |
+| Unit | `tests/test_*.py` | Does one normaliser do the right thing on one awkward value? |
+| Evaluation | `eval/score.py` | What does the organiser's own scorer say? |
+
+The contract layer earned its place immediately: it caught a real bug in
+`normalise_label` before any feature code existed. A bilingual label stripped
+to `gross weight ( kgs)`, which matched no alias. The bracket canonicalisation
+step in `normalise_label` exists because that test failed.
+
+`eval/score.py` deliberately reads the ground truth from a gitignored path and
+prints a clear message on a clean clone rather than failing. The labels are
+a measurement instrument, not an input.
+
+---
+
+## 10. Repository layout
+
+```
+core/            pure domain logic, no I/O
+  types.py       the frozen contract. One owner.
+  classify.py    stage 1                      Zi Qi
+  aliases.py     label table                  Sheng Kuan
+  parsers/       one adapter per format       Sheng Kuan
+  extract.py     stage 2                      Sheng Kuan
+  normalise.py   stage 3a                     Ee Zhan
+  compare.py     stage 3b                     Ee Zhan
+  decide.py      stage 4                      Ee Zhan
+  reply.py       draft generation             Ee Zhan
+  pipeline.py    the orchestrator             Ee Zhan
+adapters/        everything touching the outside world
+api/             FastAPI transport
+web/             Next.js UI
+eval/            the scoring harness
+tests/           contract and unit tests
+scripts/         runnable entry points
+docs/            this file and the rubric map
+data/            the organiser bundle, committable
+.secrets/        ground-truth labels. Never committable.
+```
+
+Ownership is written into the module docstrings, not only into this file, so
+it is visible at the point of work.
