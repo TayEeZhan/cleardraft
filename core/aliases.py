@@ -33,50 +33,137 @@ import unicodedata
 
 from core.types import CompareField
 
-#: Confirmed present in the organiser dataset (pools.LABELS).
+#: DELIBERATELY NOT ALIASED. Each of these labels looks like one of our seven
+#: fields and means something else. Mapping one feeds compare() a value from
+#: the wrong row, and compare() trusts this table completely - so the email
+#: comes back "MISMATCH" (or worse, "OK") with full confidence and a clerk is
+#: told a correct Bill of Lading is wrong.
+#:
+#: A MISSING label costs one escalation to a human. A WRONG label costs the
+#: trust the whole product is built on. When unsure, leave it out.
+#:
+#: tests/test_aliases.py pins every entry below to field_for_label() == None,
+#: so a future "helpful" addition fails the suite instead of shipping.
+#:
+#:   place of receipt / pre-carriage from  inland pickup, NOT port of loading
+#:   place of delivery / final destination inland dropoff, NOT port of discharge
+#:   port of transhipment                  an intermediate port
+#:   net weight / nett weight / n.w.       excludes packaging, NOT gross
+#:   tare weight                           the empty container's own weight
+#:   vgm / verified gross mass             cargo + container, a third number
+#:   total packages / no. of cartons       cartons, NOT containers
+#:   measurement / cbm                     volume, not weight or count
+#:   also notify / 2nd notify party        a DIFFERENT company
+#:   notify address                        may be an address, not a party name
+#:
+#: "Also Notify" and "Notify Address" appear as suggestions in the brief. They
+#: are excluded on purpose: the first is a second party, and the second can be
+#: a bare address, which would compare against the other document's company
+#: name and manufacture a mismatch. Ask Averis before adding either.
+
+#: Confirmed present in the organiser dataset (pools.LABELS), plus labels real
+#: SI and BL documents use that this generator does not emit. The second group
+#: is what has to carry us through the final round, which runs on unseen data.
 ALIASES: dict[CompareField, tuple[str, ...]] = {
     "shipper": (
+        # organiser dataset
         "shipper",
         "shipper/exporter",
         "shipper (principal or seller)",
         "exporter",
+        # real-world
+        "consignor",
+        "shipper/consignor",
+        "shipper name",
+        "shipped by",
+        "exporter/shipper",
+        "shipper (exporter)",
     ),
     "consignee": (
+        # organiser dataset
         "consignee",
         "consignee (non-negotiable)",
         "to the order of",
         "buyer",
+        # real-world
+        "consignee name",
+        "consigned to",
+        "receiver",
+        "consignee/receiver",
+        "to order of",
+        "consignee (complete name and address)",
     ),
     "notify_party": (
+        # organiser dataset
         "notify party",
         "notify",
         "notify party/intermediate consignee",
+        # real-world. Only labels for the FIRST notify party: "also notify"
+        # and "2nd notify party" are a different company - see the trap list.
+        "notify party 1",
+        "1st notify party",
+        "first notify party",
+        "notify party (complete name and address)",
+        "notify applicant",
     ),
     "port_of_loading": (
+        # organiser dataset
         "port of loading",
         "port of loading (pol)",
         "load port",
         "pol",
+        # real-world. NOT "place of receipt" - that is the inland pickup.
+        "loading port",
+        "port of load",
+        "port of shipment",
+        "pol (port of loading)",
+        "ocean port of loading",
     ),
     "port_of_discharge": (
+        # organiser dataset
         "port of discharge",
         "port of discharge (pod)",
         "discharge port",
         "pod",
+        # real-world. NOT "place of delivery" or "final destination".
+        "discharging port",
+        "port of unloading",
+        "pod (port of discharge)",
+        "discharge port (pod)",
+        "ocean port of discharge",
     ),
     "container_count": (
+        # organiser dataset
         "no. of containers",
         "total containers",
         "no. of containers or packages",
         "container count",
         "containers",
+        # real-world. NOT "total packages" - cartons are not containers.
+        "number of containers",
+        "no of containers",
+        "no. of container",
+        "qty of containers",
+        "quantity of containers",
+        "container qty",
+        "total container",
     ),
     "gross_weight_kg": (
+        # organiser dataset
         "gross weight (kg)",
         "gross wt (kgs)",
-        "gross weight(kgs)",
+        "gross weight (kgs)",
         "gross weight",
         "total gross weight",
+        # real-world. NOT net/nett weight, tare weight or VGM.
+        "gross wt",
+        "gross wt.",
+        "gross weight kgs",
+        "gross weight in kg",
+        "total gross wt",
+        "total gross wt (kgs)",
+        "g.w.",
+        "g.w. (kgs)",
     ),
 }
 
