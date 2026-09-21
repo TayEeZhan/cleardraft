@@ -1,0 +1,11 @@
+# Never upload these to Vercel.
+.secrets/
+.env
+.env.*
+!.env.example
+out/
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+.claude/
