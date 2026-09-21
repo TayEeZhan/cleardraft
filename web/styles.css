@@ -481,6 +481,100 @@ a.btn { text-decoration: none; display: inline-block; }
   .drop-grid { grid-template-columns: 1fr; }
 }
 
+/* ── Your mail / Sample source switch ──────────────────────── */
+.source-switch {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--surface-2); border: 1px solid var(--rule);
+  border-radius: var(--r); margin-bottom: 20px;
+}
+.switch-btn {
+  font-family: inherit; font-size: 13.5px; font-weight: 500;
+  color: var(--ink-2); background: none; border: 0; cursor: pointer;
+  padding: 9px 14px; min-height: 40px; border-radius: 5px;
+}
+.switch-btn:hover { color: var(--ink); }
+.switch-btn[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); font-weight: 600; }
+
+@media (max-width: 520px) {
+  .source-switch { display: flex; width: 100%; }
+  .switch-btn { flex: 1; padding: 9px 8px; font-size: 12.5px; }
+}
+
+/* ── Your mail: empty state ────────────────────────────────── */
+.mine-empty { max-width: 560px; margin: 0 auto 8px; text-align: center; }
+.drop-zone-large { padding: 8px; }
+.drop-zone-large .drop-label { padding: 48px 20px; }
+.drop-zone-large .drop-title { font-size: 18px; }
+.drop-zone-large .drop-hint { text-decoration: underline; text-underline-offset: 2px; }
+.mine-howto, .mine-privacy {
+  font-size: 12.5px; color: var(--ink-3); margin: 14px 0 0; max-width: 46ch;
+  margin-left: auto; margin-right: auto;
+}
+.mine-privacy { color: var(--ink-2); }
+.mine-empty-actions {
+  display: flex; justify-content: center; gap: 20px; margin-top: 22px; flex-wrap: wrap;
+}
+.mine-empty-actions .link-btn { display: inline-flex; align-items: center; min-height: 44px; }
+
+/* ── Your mail: populated state toolbar ────────────────────── */
+.board-toolbar {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.board-toolbar .search-field { margin-bottom: 0; flex: 1; min-width: 220px; }
+.mine-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.mine-actions[hidden] { display: none; }
+.mine-actions .btn { min-height: 44px; }
+.mine-actions .link-btn { display: inline-flex; align-items: center; min-height: 44px; }
+
+#view-board.drag-over #board-normal,
+#view-board.drag-over #mine-empty { outline: 2px dashed var(--marine); outline-offset: 6px; border-radius: var(--r); }
+
+/* ── Upload flow ────────────────────────────────────────────── */
+.upload-panel { margin-bottom: 16px; }
+.upload-progress {
+  font-family: var(--mono); font-size: 12px; color: var(--ink-2);
+  background: var(--surface-2); border: 1px solid var(--rule);
+  border-radius: var(--r); padding: 10px 14px; margin-bottom: 16px;
+}
+.upload-errors {
+  background: var(--surface); border: 1px solid var(--rule-2); border-left: 3px solid var(--mismatch);
+  border-radius: var(--r); padding: 12px 14px; margin-bottom: 16px;
+}
+.upload-errors-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.upload-error-row { font-size: 12.5px; color: var(--ink-2); padding: 3px 0; }
+.upload-error-row b { color: var(--ink); font-weight: 600; }
+
+/* ── Uploaded case tag + original email (case review) ──────── */
+.uploaded-tag { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+.uploaded-received { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+.skipped-note { font-size: 12.5px; color: var(--ink-3); margin: 4px 0 10px; }
+
+.orig-email {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r);
+  margin: 10px 0 22px; overflow: hidden;
+}
+.orig-email summary {
+  cursor: pointer; font-size: 13.5px; font-weight: 500; color: var(--ink-2);
+  padding: 12px 16px; min-height: 44px; display: flex; align-items: center;
+  background: var(--surface-2);
+}
+.orig-email summary:hover { color: var(--ink); }
+.orig-email[open] summary { border-bottom: 1px solid var(--rule); }
+.orig-body { padding: 14px 16px; }
+.orig-meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); margin-bottom: 10px; }
+.orig-meta-line b { color: var(--ink); font-weight: 600; margin-right: 3px; }
+.orig-text {
+  font-family: var(--mono); font-size: 13px; line-height: 1.6; color: var(--ink);
+  white-space: pre-wrap; word-break: break-word;
+}
+.orig-attachments { font-size: 12.5px; color: var(--ink-3); margin-top: 12px; }
+
+@media (max-width: 860px) {
+  .board-toolbar { align-items: stretch; }
+  .mine-actions { justify-content: space-between; }
+}
+
 /* ── held-out comparison ───────────────────────────────────── */
 .cmp { border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden; }
 .cmp-row { display: grid; grid-template-columns: 1fr 130px 130px; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--rule); align-items: baseline; }

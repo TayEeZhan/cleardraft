@@ -53,9 +53,9 @@
         <div class="home-card-title">Check your own documents</div>
         <div class="home-card-line">Upload an SI and a draft BL, or try a sample.</div>
       </a>
-      <a class="home-card" href="#/board">
-        <div class="home-card-title">Open the inbox</div>
-        <div class="home-card-line" id="home-inbox-line">Loading counts…</div>
+      <a class="home-card" href="#/board" id="home-card-mine">
+        <div class="home-card-title">Process your own emails</div>
+        <div class="home-card-line">Drop in .eml files saved from Gmail or Outlook.</div>
       </a>
     </div>
 
@@ -65,34 +65,68 @@
   <section id="view-board" class="view">
     <div class="view-head">
       <h1>Inbox</h1>
-      <p class="lede">One shared mailbox, <b id="total-count">520</b> messages. Every one has been read, sorted, and — where documents were attached — checked field by field.</p>
+      <p class="lede" id="board-lede">Loading…</p>
     </div>
 
-    <div class="search-field">
-      <label for="inbox-search" class="visually-hidden">Search the inbox</label>
-      <input type="search" id="inbox-search" class="search-input" placeholder="Search reference, subject, sender or field" autocomplete="off">
+    <div class="source-switch" role="group" aria-label="Mail source">
+      <button type="button" class="switch-btn" id="switch-mine" aria-pressed="true">Your mail (<span id="mine-count">0</span>)</button>
+      <button type="button" class="switch-btn" id="switch-sample" aria-pressed="false">Sample company inbox (<span id="sample-count">520</span>)</button>
     </div>
 
-    <div class="tabs" role="tablist" aria-label="Filter by outcome">
-      <button role="tab" class="tab" data-tab="mismatch" aria-selected="true">
-        <span class="tab-n" id="n-mismatch">0</span>
-        <span class="tab-l">Discrepancy found</span>
-      </button>
-      <button role="tab" class="tab" data-tab="needs_review" aria-selected="false">
-        <span class="tab-n" id="n-needs_review">0</span>
-        <span class="tab-l">Needs a human</span>
-      </button>
-      <button role="tab" class="tab" data-tab="cleared" aria-selected="false">
-        <span class="tab-n" id="n-cleared">0</span>
-        <span class="tab-l">Cleared</span>
-      </button>
-      <button role="tab" class="tab" data-tab="other" aria-selected="false">
-        <span class="tab-n" id="n-other">0</span>
-        <span class="tab-l">Other mail</span>
-      </button>
+    <input type="file" id="mail-file-input" class="drop-input" multiple accept=".eml,message/rfc822">
+
+    <div id="upload-panel" class="upload-panel" hidden></div>
+    <div id="upload-progress" class="upload-progress" aria-live="polite" hidden></div>
+    <div id="upload-errors" class="upload-errors" aria-live="polite" hidden></div>
+
+    <div id="mine-empty" class="mine-empty" hidden>
+      <div class="drop-zone drop-zone-large" id="mail-drop-zone">
+        <label for="mail-file-input" class="drop-label">
+          <span class="drop-title">Drop .eml files here</span>
+          <span class="drop-hint">or choose files</span>
+        </label>
+      </div>
+      <p class="mine-howto">Gmail: open the email → ⋮ → Download message. Outlook: drag the email to the desktop.</p>
+      <p class="mine-privacy">Emails are read on our server and not kept there. Results are saved only in this browser.</p>
+      <div class="mine-empty-actions">
+        <button type="button" class="link-btn" id="try-samples-btn">Try 6 sample emails</button>
+        <button type="button" class="link-btn" id="show-sample-inbox-btn">Show the sample company inbox</button>
+      </div>
     </div>
 
-    <div id="case-list" class="case-list" role="list" aria-live="polite"></div>
+    <div id="board-normal" hidden>
+      <div class="board-toolbar">
+        <div class="search-field">
+          <label for="inbox-search" class="visually-hidden">Search the inbox</label>
+          <input type="search" id="inbox-search" class="search-input" placeholder="Search reference, subject, sender or field" autocomplete="off">
+        </div>
+        <div class="mine-actions" id="mine-actions" hidden>
+          <button type="button" class="btn btn-quiet" id="add-emails-btn">Add emails</button>
+          <button type="button" class="link-btn" id="clear-mine-btn">Clear your mail</button>
+        </div>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="Filter by outcome">
+        <button role="tab" class="tab" data-tab="mismatch" aria-selected="true">
+          <span class="tab-n" id="n-mismatch">0</span>
+          <span class="tab-l">Discrepancy found</span>
+        </button>
+        <button role="tab" class="tab" data-tab="needs_review" aria-selected="false">
+          <span class="tab-n" id="n-needs_review">0</span>
+          <span class="tab-l">Needs a human</span>
+        </button>
+        <button role="tab" class="tab" data-tab="cleared" aria-selected="false">
+          <span class="tab-n" id="n-cleared">0</span>
+          <span class="tab-l">Cleared</span>
+        </button>
+        <button role="tab" class="tab" data-tab="other" aria-selected="false">
+          <span class="tab-n" id="n-other">0</span>
+          <span class="tab-l">Other mail</span>
+        </button>
+      </div>
+
+      <div id="case-list" class="case-list" role="list" aria-live="polite"></div>
+    </div>
   </section>
 
   <section id="view-review" class="view" hidden>

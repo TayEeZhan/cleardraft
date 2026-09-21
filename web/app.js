@@ -10,7 +10,49 @@ let DATA = null;
 let TAB = "mismatch";
 let QUERY = "";
 
+/* "Your mail" — the user's own uploaded results, persisted in this browser
+   only. Same row/detail shapes as the sample DATA, so every render helper
+   below can treat either source identically. */
+let MINE = { board: [], detail: {} };
+let SRC = "mine"; // "mine" | "sample" — which source the inbox view shows
+let UPLOADING = false;
+
 function pct(x) { return `${Math.round(x * 100)}%`; }
+
+function loadMine() {
+  try {
+    const raw = localStorage.getItem("cleardraft.mine.v1");
+    if (!raw) return { board: [], detail: {} };
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.board) && parsed.detail && typeof parsed.detail === "object") return parsed;
+  } catch { /* corrupt or inaccessible storage — start empty */ }
+  return { board: [], detail: {} };
+}
+
+function saveMine() {
+  try {
+    localStorage.setItem("cleardraft.mine.v1", JSON.stringify(MINE));
+  } catch {
+    toast("Browser storage is full — clear your mail to add more");
+  }
+}
+
+function getSourceKey() {
+  try {
+    const s = localStorage.getItem("cleardraft.source");
+    if (s === "mine" || s === "sample") return s;
+  } catch { /* fall through to the default */ }
+  return "mine";
+}
+
+function setSourceKey(s) {
+  SRC = s;
+  try { localStorage.setItem("cleardraft.source", s); } catch { /* per-viewer convenience only */ }
+}
+
+function activeBoard() { return SRC === "mine" ? MINE.board : DATA.board; }
+
+function lookupDetail(id) { return MINE.detail[id] || (DATA && DATA.detail[id]); }
 
 async function load() {
   try {
@@ -65,7 +107,7 @@ function renderBoard() {
   const list = $("#case-list");
   list.replaceChildren();
   const q = QUERY.trim().toLowerCase();
-  const rows = DATA.board.filter((r) => tabOf(r) === TAB && matchesQuery(r, q));
+  const rows = activeBoard().filter((r) => tabOf(r) === TAB && matchesQuery(r, q));
 
   if (!rows.length) { list.append(el("div", "empty", q ? "No matches in this tab." : "Nothing here.")); return; }
 
@@ -100,13 +142,18 @@ function setTab(t) {
 }
 
 /* Tab counts track the current search too, so a clerk can see at a glance
-   which tabs hold a match without opening each one. */
+   which tabs hold a match without opening each one. Always computed from
+   the active source's rows — Your mail and the sample inbox each get their
+   own counts, never DATA.counts (that number is fixed to the sample run). */
 function updateTabCounts() {
   const q = QUERY.trim().toLowerCase();
-  for (const [k, total] of Object.entries(DATA.counts)) {
+  const rows = activeBoard();
+  const totals = { mismatch: 0, needs_review: 0, cleared: 0, other: 0 };
+  for (const r of rows) totals[tabOf(r)]++;
+  for (const k of Object.keys(totals)) {
     const n = $(`#n-${k}`);
     if (!n) continue;
-    n.textContent = q ? DATA.board.filter((r) => tabOf(r) === k && matchesQuery(r, q)).length : total;
+    n.textContent = q ? rows.filter((r) => tabOf(r) === k && matchesQuery(r, q)).length : totals[k];
   }
 }
 
@@ -198,28 +245,93 @@ function printButton() {
 
 addEventListener("beforeprint", () => {
   const h = location.hash;
-  const d = h.startsWith("#/case/") && DATA && DATA.detail[h.slice("#/case/".length)];
+  const d = h.startsWith("#/case/") && lookupDetail(h.slice("#/case/".length));
   $("#print-ref").textContent = d ? d.reference : h.startsWith("#/check") ? "Uploaded pair" : "";
   $("#print-time").textContent = `Printed ${new Date().toLocaleString()}`;
 });
 
+/* The attachment names for the "Original email" panel. An uploaded case
+   carries them directly (contract: attachments: [names]); a sample case
+   only has the two documents the pipeline actually opened. */
+function attachmentNames(d) {
+  if (Array.isArray(d.attachments)) return d.attachments;
+  const names = [];
+  if (d.documents) {
+    for (const side of ["si", "bl"]) {
+      const doc = d.documents[side];
+      if (doc && doc.path) names.push(String(doc.path).split(/[\\/]/).pop());
+    }
+  }
+  return names;
+}
+
+function metaLine(label, value) {
+  const s = el("span", "orig-meta-line");
+  s.append(el("b", null, label));
+  s.append(document.createTextNode(value || "—"));
+  return s;
+}
+
+/* Every case gets this, collapsed by default: the message as it arrived,
+   untouched. A worker should never have to open their own mail client just
+   to see what was asked — everything they need is already on this page.
+   Built with el()/textContent throughout: subject, from and body can come
+   straight from an uploaded .eml, so none of it is trusted as markup. */
+function originalEmailDetails(d) {
+  const details = el("details", "orig-email");
+  details.append(el("summary", null, "Original email"));
+
+  const body = el("div", "orig-body");
+  const meta = el("div", "orig-meta");
+  meta.append(metaLine("From ", d.from));
+  meta.append(metaLine("Subject ", d.subject));
+  body.append(meta);
+
+  body.append(el("div", "orig-text", d.body || "(no message body)"));
+
+  const names = attachmentNames(d);
+  if (names.length) {
+    const att = el("div", "orig-attachments");
+    att.append(el("b", null, "Attachments: "));
+    att.append(document.createTextNode(names.join(", ")));
+    body.append(att);
+  }
+
+  details.append(body);
+  return details;
+}
+
 function renderReview(id) {
-  const d = DATA.detail[id];
+  const d = lookupDetail(id);
   const host = $("#review-body");
   host.replaceChildren();
   if (!d) { host.append(el("div", "empty", "Not found.")); return; }
 
+  /* Built with el()/textContent, not innerHTML: an uploaded case's subject
+     and sender text come straight from the .eml the user dropped in, so
+     none of it is trusted as markup, escaped or not. */
   const head = el("div", "case-head");
-  head.innerHTML = `
-    <div class="ref">${esc(d.reference)}</div>
-    <h1>${esc(d.subject)}</h1>
-    <div class="case-meta">
-      <span>${esc(d.from)}</span>
-      <span>${esc(d.category.replace(/_/g, " ").toLowerCase())}</span>
-      <span>decided by ${esc(d.decided_by)}</span>
-    </div>`;
+  head.append(el("div", "ref", d.reference));
+  head.append(el("h1", null, d.subject));
+  const meta = el("div", "case-meta");
+  meta.append(el("span", null, d.from));
+  meta.append(el("span", null, d.category.replace(/_/g, " ").toLowerCase()));
+  meta.append(el("span", null, `decided by ${d.decided_by}`));
+  head.append(meta);
+
+  if (d.uploaded) {
+    const tag = el("div", "uploaded-tag");
+    tag.append(el("span", "chip chip-quiet", `Uploaded · ${d.filename || "email"}`));
+    if (d.received) tag.append(el("span", "uploaded-received", d.received));
+    head.append(tag);
+  }
+  if (d.skipped_attachments && d.skipped_attachments.length) {
+    head.append(el("div", "skipped-note", `Not read: ${d.skipped_attachments.join(", ")}`));
+  }
+
   host.append(head);
   host.append(printButton());
+  host.append(originalEmailDetails(d));
 
   if (d.recheck) {
     renderVerdict(d, host, { reply: false });
@@ -277,7 +389,8 @@ function seamTable(d) {
         const fv = c[side];
         if (!fv || !fv.raw) continue;
         const line = el("div", "proof-line");
-        line.innerHTML = `<b>${side.toUpperCase()}</b>  ${esc(fv.raw)}`;
+        line.append(el("b", null, side.toUpperCase()));
+        line.append(document.createTextNode(`  ${fv.raw}`));
         panel.append(line);
         panel.append(el("div", "proof-src", `${fv.source}${fv.line_no ? `, line ${fv.line_no}` : ""}`));
       }
@@ -657,11 +770,6 @@ function initCheckPage() {
 function renderHome() {
   if (!DATA) return;
 
-  const inboxLine = $("#home-inbox-line");
-  if (inboxLine && DATA.counts) {
-    inboxLine.textContent = `${DATA.counts.mismatch} discrepancies and ${DATA.counts.needs_review} cases waiting for a person`;
-  }
-
   const proof = $("#home-proof");
   if (proof && DATA.stats) {
     const s = DATA.stats;
@@ -673,6 +781,272 @@ function renderHome() {
     }
     if (parts.length) proof.textContent = parts.join(" · ");
   }
+}
+
+/* ── Inbox view: Your mail vs the sample company inbox ────────
+   One board view, two data sources. The segmented switch picks the
+   source; everything else (tabs, search, counts, the case list) already
+   runs on activeBoard(), so the rest of the render just decides which
+   chrome to show — the empty "add your first email" state, or the normal
+   tabs/search/list. */
+function renderBoardView() {
+  if (!DATA) return;
+  const mineCount = MINE.board.length;
+  const sampleCount = DATA.board.length;
+
+  $("#mine-count").textContent = mineCount;
+  $("#sample-count").textContent = sampleCount;
+  $("#switch-mine").setAttribute("aria-pressed", String(SRC === "mine"));
+  $("#switch-sample").setAttribute("aria-pressed", String(SRC === "sample"));
+
+  const lede = $("#board-lede");
+  if (SRC === "mine") {
+    lede.textContent = mineCount
+      ? `Your own mail, ${mineCount} message${mineCount === 1 ? "" : "s"} read by the live pipeline.`
+      : "Add your own emails and watch the live pipeline check them.";
+  } else {
+    lede.textContent = `One shared mailbox, ${sampleCount} messages. Every one has been read, sorted, and — where documents were attached — checked field by field.`;
+  }
+
+  const showEmpty = SRC === "mine" && mineCount === 0;
+  $("#mine-empty").hidden = !showEmpty;
+  $("#board-normal").hidden = showEmpty;
+  $("#mine-actions").hidden = SRC !== "mine";
+
+  if (!showEmpty) {
+    updateTabCounts();
+    renderBoard();
+  }
+}
+
+function switchSource(s) {
+  if (SRC === s) return;
+  setSourceKey(s);
+  clearUploadPanels();
+  renderBoardView();
+}
+
+/* ── Upload flow ────────────────────────────────────────────────
+   One .eml per request (Vercel's body limit), so files upload one at a
+   time in sequence rather than all at once. Each success is merged and
+   saved immediately, so a batch that fails partway through still keeps
+   whatever it already read. */
+function clearUploadPanels() {
+  $("#upload-panel").hidden = true;
+  $("#upload-panel").replaceChildren();
+  $("#upload-errors").hidden = true;
+  $("#upload-errors").replaceChildren();
+}
+
+function showUploadApiMissing() {
+  const host = $("#upload-panel");
+  host.replaceChildren();
+  host.hidden = false;
+  const panel = el("div", "check-error");
+  panel.append(el("strong", null, "Uploading needs the live API."));
+  panel.append(el("p", null, "This static preview has no backend. Use the live site:"));
+  const a = el("a", "check-error-link", "https://cleardraft-one.vercel.app");
+  a.href = "https://cleardraft-one.vercel.app";
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  panel.append(a);
+  host.append(panel);
+}
+
+function showUploadErrors(errors) {
+  const host = $("#upload-errors");
+  host.replaceChildren();
+  if (!errors.length) { host.hidden = true; return; }
+  host.hidden = false;
+  host.append(el("div", "upload-errors-title", `${errors.length} file${errors.length === 1 ? "" : "s"} could not be read`));
+  for (const e of errors) {
+    const row = el("div", "upload-error-row");
+    row.append(el("b", null, e.name));
+    row.append(document.createTextNode(` — ${e.detail}`));
+    host.append(row);
+  }
+}
+
+function setUploadingUI(uploading) {
+  UPLOADING = uploading;
+  for (const id of ["add-emails-btn", "try-samples-btn", "clear-mine-btn", "mail-file-input"]) {
+    const node = $(`#${id}`);
+    if (node) node.disabled = uploading;
+  }
+}
+
+/* Merge one processed email into Your mail, deduping by email_id — a
+   re-upload of the same message (stable "up_" + hash id) replaces the
+   earlier result in place rather than appearing twice. */
+function mergeMineResult(data) {
+  const { board, detail } = data;
+  const idx = MINE.board.findIndex((r) => r.email_id === board.email_id);
+  if (idx >= 0) MINE.board[idx] = board; else MINE.board.unshift(board);
+  MINE.detail[board.email_id] = detail;
+}
+
+async function uploadOne(file) {
+  const fd = new FormData();
+  fd.append("eml", file);
+  let r;
+  try {
+    r = await fetch("/api/process-email", { method: "POST", body: fd });
+  } catch {
+    throw { missingApi: true };
+  }
+  // A static server with no backend answers POST with 404/405, or — as
+  // Python's http.server does — 501 Not Implemented. A real API failure is
+  // always JSON per the contract; anything else (an HTML error page, an
+  // empty body) means there is no live API to talk to, not a rejected file.
+  if (r.status === 404 || r.status === 405 || r.status === 501) throw { missingApi: true };
+  if (r.status === 413) throw { detail: "file is too large (4 MB max)" };
+  if (!r.ok) {
+    const ct = r.headers.get("content-type") || "";
+    if (!ct.includes("json")) throw { missingApi: true };
+    const j = await r.json().catch(() => ({}));
+    throw { detail: j.detail || j.error || `HTTP ${r.status}` };
+  }
+  return r.json();
+}
+
+async function uploadFiles(fileList) {
+  if (UPLOADING) return;
+  const files = Array.from(fileList || []);
+  const emlFiles = files.filter((f) => /\.eml$/i.test(f.name) || f.type === "message/rfc822");
+  const skipped = files.filter((f) => !emlFiles.includes(f));
+
+  clearUploadPanels();
+  if (!emlFiles.length) {
+    toast(files.length ? "Only .eml files are supported." : "No files selected.");
+    return;
+  }
+
+  setUploadingUI(true);
+  const progress = $("#upload-progress");
+  progress.hidden = false;
+
+  const errors = skipped.map((f) => ({ name: f.name, detail: "not a .eml file" }));
+  let successCount = 0;
+  let mismatchCount = 0;
+
+  for (let i = 0; i < emlFiles.length; i++) {
+    const file = emlFiles[i];
+    progress.textContent = `Reading ${i + 1} of ${emlFiles.length} — ${file.name}`;
+    try {
+      const data = await uploadOne(file);
+      mergeMineResult(data);
+      saveMine();
+      successCount++;
+      if (data.board && data.board.status === "MISMATCH") mismatchCount++;
+      renderBoardView();
+    } catch (err) {
+      if (err && err.missingApi) {
+        progress.hidden = true;
+        setUploadingUI(false);
+        showUploadApiMissing();
+        return;
+      }
+      errors.push({ name: file.name, detail: (err && err.detail) || "could not be processed" });
+    }
+  }
+
+  progress.hidden = true;
+  setUploadingUI(false);
+  showUploadErrors(errors);
+  renderBoardView();
+
+  if (successCount) {
+    toast(`${successCount} email${successCount === 1 ? "" : "s"} read${mismatchCount ? ` · ${mismatchCount} with a discrepancy` : ""}`);
+  }
+}
+
+/* "Try 6 sample emails" runs the exact same upload path against real .eml
+   files shipped with the site — this is live processing through the real
+   API, not canned data. If the manifest or the files themselves cannot be
+   fetched (as on a static preview with no deployed backend), that reads
+   the same as the API being unavailable. */
+async function trySampleEmails() {
+  if (UPLOADING) return;
+  clearUploadPanels();
+
+  let manifest;
+  try {
+    const r = await fetch("samples/eml/manifest.json");
+    if (!r.ok) throw new Error("missing");
+    manifest = await r.json();
+  } catch {
+    showUploadApiMissing();
+    return;
+  }
+
+  const entries = (manifest && manifest.files) || [];
+  if (!entries.length) { toast("No sample emails available."); return; }
+
+  const files = [];
+  for (const entry of entries) {
+    try {
+      const r = await fetch(`samples/eml/${entry.name}`);
+      if (!r.ok) throw new Error("missing");
+      const blob = await r.blob();
+      files.push(new File([blob], entry.name, { type: "message/rfc822" }));
+    } catch { /* skip a missing sample file, try the rest */ }
+  }
+
+  if (!files.length) { showUploadApiMissing(); return; }
+  await uploadFiles(files);
+}
+
+function initSourceSwitch() {
+  $("#switch-mine").addEventListener("click", () => switchSource("mine"));
+  $("#switch-sample").addEventListener("click", () => switchSource("sample"));
+}
+
+function initMineControls() {
+  const input = $("#mail-file-input");
+  input.addEventListener("change", () => {
+    uploadFiles(input.files);
+    input.value = "";
+  });
+
+  $("#add-emails-btn").addEventListener("click", () => input.click());
+  $("#try-samples-btn").addEventListener("click", trySampleEmails);
+  $("#show-sample-inbox-btn").addEventListener("click", () => switchSource("sample"));
+
+  $("#clear-mine-btn").addEventListener("click", () => {
+    if (UPLOADING) return;
+    if (!confirm("Clear all of your uploaded mail? This cannot be undone.")) return;
+    MINE = { board: [], detail: {} };
+    saveMine();
+    clearUploadPanels();
+    renderBoardView();
+    toast("Your mail cleared.");
+  });
+
+  const zone = $("#mail-drop-zone");
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.dataset.drag = "true"; });
+  zone.addEventListener("dragleave", () => { zone.dataset.drag = "false"; });
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.dataset.drag = "false";
+    if (UPLOADING) return;
+    const dropped = e.dataTransfer && e.dataTransfer.files;
+    if (dropped && dropped.length) uploadFiles(dropped);
+  });
+
+  // Drag-and-drop anywhere on the inbox view, not just the empty-state zone.
+  const view = $("#view-board");
+  ["dragenter", "dragover"].forEach((evt) => view.addEventListener(evt, (e) => {
+    if (SRC !== "mine" || UPLOADING) return;
+    e.preventDefault();
+    view.classList.add("drag-over");
+  }));
+  ["dragleave", "drop"].forEach((evt) => view.addEventListener(evt, () => view.classList.remove("drag-over")));
+  view.addEventListener("drop", (e) => {
+    if (SRC !== "mine" || UPLOADING) return;
+    e.preventDefault();
+    const dropped = e.dataTransfer && e.dataTransfer.files;
+    if (dropped && dropped.length) uploadFiles(dropped);
+  });
 }
 
 function route() {
@@ -695,7 +1069,7 @@ function route() {
   } else if (h.startsWith("#/board")) {
     active = "board";
     views.board.hidden = false;
-    renderBoard();
+    renderBoardView();
   } else {
     // "", "#", "#/", and any hash we don't recognise all land on the home
     // screen rather than a dead page.
@@ -722,6 +1096,9 @@ function toast(msg) {
 }
 
 (async function boot() {
+  MINE = loadMine();
+  SRC = getSourceKey();
+
   try {
     DATA = await load();
   } catch {
@@ -729,13 +1106,17 @@ function toast(msg) {
     return;
   }
 
-  $("#total-count").textContent = DATA.board.length;
-  updateTabCounts();
   for (const b of document.querySelectorAll(".tab")) {
     b.addEventListener("click", () => setTab(b.dataset.tab));
   }
   initCheckPage();
   initSearch();
+  initSourceSwitch();
+  initMineControls();
+
+  const mineCard = $("#home-card-mine");
+  if (mineCard) mineCard.addEventListener("click", () => setSourceKey("mine"));
+
   addEventListener("hashchange", route);
   route();
 })();

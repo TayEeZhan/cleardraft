@@ -1,0 +1,28 @@
+{
+  "files": [
+    {
+      "name": "01_mismatch_email_004.eml",
+      "label": "Mismatch: consignee and notify party differ (SI vs draft BL, .txt)"
+    },
+    {
+      "name": "02_mismatch_pdf_email_313.eml",
+      "label": "Mismatch: container count and gross weight differ (SI vs draft BL, .pdf)"
+    },
+    {
+      "name": "03_cleared_email_001.eml",
+      "label": "Clean pass: all 7 fields match (SI vs draft BL, .txt)"
+    },
+    {
+      "name": "04_needs_review_email_208.eml",
+      "label": "Needs review: a required field is missing or blank (SI vs draft BL, .pdf)"
+    },
+    {
+      "name": "05_nonbl_invoice_email_002.eml",
+      "label": "Not a comparison: an invoice query with no attachments"
+    },
+    {
+      "name": "06_challenge_ch_01.eml",
+      "label": "Held-out set: an unseen email format, no attachments bundled"
+    }
+  ]
+}

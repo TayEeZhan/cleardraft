@@ -6,9 +6,17 @@ OWNER: whoever is told to build the live-check API. Deployed on Vercel.
 `vercel.json` rewrites `/api/(.*)` to `/api/index`, and the function receives
 the ORIGINAL path, so routes below are registered with the full `/api/...`
 prefix.
+
+Routes:
+    GET  /api/health          - liveness + parser/model availability
+    POST /api/check            - compare an uploaded SI against an uploaded BL
+    POST /api/process-email    - parse an uploaded .eml, run it end to end
+                                  through classify/extract/compare/decide,
+                                  same as the dataset path in core/pipeline.py
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -22,12 +30,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, File, Form, UploadFile  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
+from adapters.eml import EmlError, parse_eml, safe_filename  # noqa: E402
 from adapters.model import STATS, available as model_available  # noqa: E402
 from core import parsers  # noqa: E402
 from core.classify import classify  # noqa: E402
 from core.compare import compare  # noqa: E402
 from core.decide import decide  # noqa: E402
 from core.extract import extract  # noqa: E402
+from core.pipeline import split_si_bl  # noqa: E402
 from core.reply import FIELD_LABELS, _reference, draft_reply  # noqa: E402
 from core.types import Classification, Email  # noqa: E402
 
@@ -38,6 +48,10 @@ _ALLOWED_EXTENSIONS = {".txt", ".pdf", ".xlsx", ".docx"}
 
 #: 2 MB. A file this size or smaller is accepted; anything larger is rejected.
 _MAX_BYTES = 2 * 1024 * 1024
+
+#: 4 MB cap for an uploaded .eml. Vercel's own request-body limit is 4.5 MB,
+#: so this leaves headroom for multipart framing overhead.
+_EML_MAX_BYTES = 4 * 1024 * 1024
 
 #: The web form IS an explicit request to compare - never the classifier's
 #: own read of subject/body. See spec step 5.
@@ -64,14 +78,14 @@ def _error(status_code: int, error: str, detail: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": error, "detail": detail})
 
 
-async def _read_capped(upload: UploadFile) -> "bytes | None":
-    """Read at most _MAX_BYTES + 1 bytes. Returns None when that is oversized.
+async def _read_capped(upload: UploadFile, max_bytes: int = _MAX_BYTES) -> "bytes | None":
+    """Read at most max_bytes + 1 bytes. Returns None when that is oversized.
 
     Reading one byte past the cap is enough to decide "too big" without ever
     holding a large upload fully in memory just to reject it.
     """
-    data = await upload.read(_MAX_BYTES + 1)
-    if len(data) > _MAX_BYTES:
+    data = await upload.read(max_bytes + 1)
+    if len(data) > max_bytes:
         return None
     return data
 
@@ -97,6 +111,21 @@ def _doc_info(doc, name: str) -> dict:
         "kind": doc.kind,
         "readable": doc.readable,
         "error": doc.error,
+    }
+
+
+def _export_doc(doc, name: "str | None" = None) -> "dict | None":
+    """Mirror scripts/export_ui_data.py's `_doc` shape exactly, so the UI's
+    existing document-panel renderer works unchanged against this endpoint."""
+    if doc is None:
+        return None
+    return {
+        # The display name, never the server's temp path.
+        "path": name or os.path.basename(doc.path),
+        "kind": doc.kind,
+        "readable": doc.readable,
+        "error": doc.error,
+        "text": doc.text,
     }
 
 
@@ -221,3 +250,161 @@ async def check(
         "from": "",
     }
     return payload
+
+
+@app.post("/api/process-email")
+async def process_email(eml: "UploadFile | None" = File(None)):
+    """Upload-your-own-email demo path.
+
+    Parses one .eml file (adapters/eml.py), builds a core.types.Email from
+    it, and runs the exact same classify -> extract -> compare -> decide ->
+    draft_reply chain as core/pipeline.process and scripts/export_ui_data.py,
+    so the response can be dropped straight into the same board/detail
+    renderers the dataset-backed UI already uses.
+
+    Nothing is written anywhere except a per-request tempfile.TemporaryDirectory,
+    which is removed before this function returns. No email content is logged.
+    """
+    started = time.time()
+
+    if eml is None or not eml.filename:
+        return _error(400, "unsupported_extension", "'eml' file is required")
+
+    ext = os.path.splitext(eml.filename)[1].lower()
+    if ext != ".eml":
+        return _error(
+            400, "unsupported_extension", f"'eml' file extension {ext!r} is not supported"
+        )
+
+    data = await _read_capped(eml, _EML_MAX_BYTES)
+    if data is None:
+        return _error(400, "file_too_large", "'eml' file exceeds 4 MB")
+
+    try:
+        parsed = parse_eml(data)
+    except EmlError as exc:
+        return _error(400, "not_an_email", str(exc))
+
+    # Dedupe re-uploads of the same file: same bytes -> same email_id, every
+    # time, with no state kept between requests.
+    email_id = "up_" + hashlib.sha1(data).hexdigest()[:12]
+
+    # Basename only, for display - never used to build a filesystem path.
+    upload_name = eml.filename.replace("\\", "/").rsplit("/", 1)[-1]
+
+    before = _stats_snapshot()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # Only attachments in a supported format are written to disk and run
+        # through the pipeline; the rest are reported back as skipped so the
+        # UI can say why they were not compared.
+        saved_names: list[str] = []
+        original_by_saved: dict[str, str] = {}
+        original_names: list[str] = []
+        skipped_attachments: list[str] = []
+
+        for index, (orig_name, content) in enumerate(parsed.attachments):
+            original_names.append(orig_name)
+            attachment_ext = os.path.splitext(orig_name)[1].lower()
+            if attachment_ext not in _ALLOWED_EXTENSIONS:
+                skipped_attachments.append(orig_name)
+                continue
+            saved = safe_filename(orig_name, index)
+            path = os.path.join(tmp_dir, saved)
+            with open(path, "wb") as fh:
+                fh.write(content)
+            saved_names.append(saved)
+            original_by_saved[saved] = orig_name
+
+        email_obj = Email(
+            email_id=email_id,
+            sender=parsed.sender,
+            subject=parsed.subject,
+            body=parsed.body,
+            attachments=tuple(saved_names),
+        )
+
+        # Same shape as core.pipeline.process: classify first, and only read
+        # attachments off disk when the classifier actually calls for it.
+        classification = classify(email_obj)
+
+        docs = []
+        if classification.category == "BL_COMPARISON":
+            docs = [extract(os.path.join(tmp_dir, name)) for name in saved_names]
+
+        si, bl = split_si_bl(docs)
+
+        comparisons = ()
+        if si is not None and bl is not None and si.readable and bl.readable:
+            comparisons = compare(si, bl)
+
+        decision = decide(email_obj, classification, si, bl, comparisons)
+        reply_draft = draft_reply(email_obj, decision)
+        reference = _reference(email_obj)
+
+        def _source_name(doc) -> str:
+            if doc is None:
+                return ""
+            saved = os.path.basename(doc.path)
+            return original_by_saved.get(saved, saved)
+
+        comparison_rows = [
+            {
+                "field": c.field,
+                "label": FIELD_LABELS.get(c.field, c.field),
+                "matched": c.matched,
+                "undecidable": c.undecidable,
+                "si": _fv(c.si, _source_name(si)),
+                "bl": _fv(c.bl, _source_name(bl)),
+            }
+            for c in comparisons
+        ]
+
+        board = {
+            "email_id": email_obj.email_id,
+            "subject": email_obj.subject,
+            "from": email_obj.sender,
+            "reference": reference,
+            "category": decision.category,
+            "status": decision.status,
+            "review_reason": decision.review_reason,
+            "has_defect": decision.has_defect,
+            "defect_fields": list(decision.defect_fields),
+            "attachment_count": len(email_obj.attachments),
+            "decided_by": decision.decided_by,
+        }
+
+        detail = {
+            "email_id": email_obj.email_id,
+            "subject": email_obj.subject,
+            "from": email_obj.sender,
+            "body": email_obj.body,
+            "reference": reference,
+            "category": decision.category,
+            "intent": classification.intent,
+            "evidence": classification.evidence,
+            "status": decision.status,
+            "review_reason": decision.review_reason,
+            "rationale": decision.rationale,
+            "decided_by": decision.decided_by,
+            "defect_fields": list(decision.defect_fields),
+            "documents": {"si": _export_doc(si, _source_name(si)), "bl": _export_doc(bl, _source_name(bl))},
+            "comparisons": comparison_rows,
+            "reply_draft": reply_draft,
+            "recheck": None,
+            "uploaded": True,
+            "filename": upload_name,
+            "received": parsed.date,
+            "attachments": original_names,
+            "skipped_attachments": skipped_attachments,
+        }
+
+    after = _stats_snapshot()
+    model_delta = {key: after[key] - before[key] for key in before}
+
+    return {
+        "board": board,
+        "detail": detail,
+        "model": {"available": model_available(), **model_delta},
+        "seconds": round(time.time() - started, 2),
+    }

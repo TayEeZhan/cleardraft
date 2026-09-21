@@ -11,7 +11,11 @@ Averis x Monash Hackathon 2026.
    wrong fields, the source line behind every value, and the reply it drafted.
 2. Go to **Check a pair** and press **No files? Use a sample pair** →
    **Sample with discrepancies**. That pair is read live on the server.
-3. Open **Accuracy** to see the results on the full inbox and on mail the
+3. Open **Inbox** → **Try 6 sample emails**. Your inbox starts empty; six
+   real `.eml` files go through the live pipeline one by one. Drop in your
+   own `.eml` files the same way (Gmail: ⋮ → Download message). Results stay
+   in your browser; **Sample company inbox** shows the full 520-email run.
+4. Open **Accuracy** to see the results on the full inbox and on mail the
    system has never seen.
 
 A shipping desk receives hundreds of emails a day in one mailbox: requests to

@@ -55,6 +55,7 @@ Two endpoints are implemented and deployed:
 |---|---|
 | `GET /api/health` | Built |
 | `POST /api/check` | Built — this is the live checker behind the UI's `#/check` page |
+| `POST /api/process-email` | Built — one `.eml` file (field `eml`, 4 MB max) runs through the whole pipeline; returns `{board, detail, model, seconds}` in the same shapes as `web/public/data.json`. Behind the inbox's "Your mail" upload |
 
 Everything else originally sketched for this contract is **planned, not
 built**: `GET /api/emails`, `GET /api/emails/{email_id}`, `GET /api/stats`,
