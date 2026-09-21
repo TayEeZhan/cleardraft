@@ -361,7 +361,6 @@ def test_classifier_evidence_gate_matches_the_extraction_gate() -> None:
     that is not in the email must not. Same rule as field extraction."""
     from core.extract import verify_against_source
 
-    body = "Please verify the draft
-bill of lading against our SI."
+    body = "Please verify the draft" + chr(10) + "bill of lading against our SI."
     assert verify_against_source("verify the draft bill of lading", body)
     assert not verify_against_source("please cancel the invoice", body)
