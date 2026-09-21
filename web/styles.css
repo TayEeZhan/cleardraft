@@ -443,3 +443,17 @@ a.btn { text-decoration: none; display: inline-block; }
 .cmp-good { color: var(--match); font-weight: 600; }
 .cmp-facts { font-size: 12.5px; color: var(--ink-2); margin-top: 12px; }
 @media (max-width: 860px) { .cmp-row { grid-template-columns: 1fr 80px 80px; } }
+
+/* ── phone top bar ─────────────────────────────────────────────
+   Three nav links plus the data-source chip were 444px wide on a 375px
+   phone, so every page scrolled sideways. On narrow screens the chip goes
+   (it is diagnostic, not something a clerk acts on) and the nav tightens. */
+@media (max-width: 860px) {
+  .source { display: none; }
+  .nav { gap: 2px; }
+  .nav-link { padding: 7px 9px; font-size: 13.5px; white-space: nowrap; }
+}
+@media (max-width: 420px) {
+  .brand-name { font-size: 16px; }
+  .mark { display: none; }
+}

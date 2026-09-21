@@ -38,3 +38,6 @@ out/submission*.json
 .pytest_cache/
 
 .vercel
+
+# Session handoff notes - local only, may reference private context
+HANDOFF.md
