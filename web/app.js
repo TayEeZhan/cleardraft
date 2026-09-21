@@ -1,6 +1,7 @@
 /* ClearDraft UI.
-   Prefers the live API; falls back to the exported snapshot so the demo
-   cannot break in front of a judge because a free-tier server was cold. */
+   Board data comes straight from the exported snapshot (public/data.json).
+   Everything else — uploads, live checks, accounts — talks to the API
+   directly, each at the point it is needed. */
 
 const $ = (s, r = document) => r.querySelector(s);
 const el = (t, c, txt) => { const n = document.createElement(t); if (c) n.className = c; if (txt != null) n.textContent = txt; return n; };
@@ -24,6 +25,7 @@ let UPLOADING = false;
 let ACCOUNT = { available: null, user: null };
 let ACCOUNT_MODE = "signup"; // "signup" | "signin" — #/account form mode
 let ADDMAIL_TAB = "drop";    // "drop" | "paste" — which add-mail tab shows
+let ADDMAIL_TAB_TOUCHED = false; // has the visitor picked a tab themselves this session?
 let ADDMAIL_OPEN = false;    // populated "Your mail": is the add-mail panel open
 
 function pct(x) { return `${Math.round(x * 100)}%`; }
@@ -64,13 +66,6 @@ function activeBoard() { return SRC === "mine" ? MINE.board : DATA.board; }
 function lookupDetail(id) { return MINE.detail[id] || (DATA && DATA.detail[id]); }
 
 async function load() {
-  try {
-    const r = await fetch("/api/emails", { signal: AbortSignal.timeout(2500) });
-    if (r.ok) {
-      const live = await r.json();
-      if (live && live.emails) return live;
-    }
-  } catch { /* fall through to the snapshot */ }
   const r = await fetch("public/data.json");
   if (!r.ok) throw new Error("could not load results");
   return r.json();
@@ -278,6 +273,7 @@ function metaLine(label, value) {
    straight from an uploaded .eml, so none of it is trusted as markup. */
 function originalEmailDetails(d) {
   const details = el("details", "orig-email");
+  if (d.uploaded) details.open = true;
   details.append(el("summary", null, "Original email"));
 
   const body = el("div", "orig-body");
@@ -813,6 +809,11 @@ function renderBoardView() {
   $("#mine-sample-actions").hidden = !(SRC === "mine" && showEmpty);
 
   const showAddMail = SRC === "mine" && (showEmpty || ADDMAIL_OPEN);
+  if (showAddMail && !ADDMAIL_TAB_TOUCHED) {
+    // Most visitors opening this panel for the first time don't have a
+    // saved .eml file yet — lead with the tab they can actually use.
+    setAddMailTab(showEmpty ? "paste" : "drop");
+  }
   $("#addmail-panel").hidden = !showAddMail;
   const addBtn = $("#add-emails-btn");
   if (addBtn) addBtn.setAttribute("aria-expanded", String(ADDMAIL_OPEN));
@@ -842,6 +843,7 @@ function switchSource(s) {
   setSourceKey(s);
   clearUploadPanels();
   ADDMAIL_OPEN = false;
+  ADDMAIL_TAB_TOUCHED = false;
   setAddMailTab("drop");
   renderBoardView();
 }
@@ -901,8 +903,10 @@ function setUploadingUI(uploading) {
 function mergeMineResult(data) {
   const { board, detail } = data;
   const idx = MINE.board.findIndex((r) => r.email_id === board.email_id);
-  if (idx >= 0) MINE.board[idx] = board; else MINE.board.unshift(board);
+  const alreadyThere = idx >= 0;
+  if (alreadyThere) MINE.board[idx] = board; else MINE.board.unshift(board);
   MINE.detail[board.email_id] = detail;
+  return alreadyThere;
 }
 
 /* Signed-in mail lives on the server (already saved by the time the
@@ -963,15 +967,17 @@ async function uploadFiles(fileList) {
   const errors = skipped.map((f) => ({ name: f.name, detail: "not a .eml file" }));
   let successCount = 0;
   let mismatchCount = 0;
+  let duplicateCount = 0;
 
   for (let i = 0; i < emlFiles.length; i++) {
     const file = emlFiles[i];
     progress.textContent = `Reading ${i + 1} of ${emlFiles.length} — ${file.name}`;
     try {
       const data = await uploadOne(file);
-      mergeMineResult(data);
+      const wasDuplicate = mergeMineResult(data);
       persistMineIfLocal();
       successCount++;
+      if (wasDuplicate) duplicateCount++;
       if (data.board && data.board.status === "MISMATCH") mismatchCount++;
       renderBoardView();
     } catch (err) {
@@ -991,7 +997,10 @@ async function uploadFiles(fileList) {
   renderBoardView();
 
   if (successCount) {
-    toast(`${successCount} email${successCount === 1 ? "" : "s"} read${mismatchCount ? ` · ${mismatchCount} with a discrepancy` : ""}`);
+    let msg = `${successCount} email${successCount === 1 ? "" : "s"} read`;
+    if (mismatchCount) msg += ` · ${mismatchCount} with a discrepancy`;
+    if (duplicateCount) msg += ` · ${duplicateCount} already in your mail`;
+    toast(msg);
   }
 }
 
@@ -1106,13 +1115,20 @@ function setAddMailTab(tab) {
 }
 
 function initAddMailTabs() {
-  $("#addmail-tab-drop").addEventListener("click", () => setAddMailTab("drop"));
-  $("#addmail-tab-paste").addEventListener("click", () => setAddMailTab("paste"));
+  $("#addmail-tab-drop").addEventListener("click", () => { ADDMAIL_TAB_TOUCHED = true; setAddMailTab("drop"); });
+  $("#addmail-tab-paste").addEventListener("click", () => { ADDMAIL_TAB_TOUCHED = true; setAddMailTab("paste"); });
 }
 
 function resetPasteForm() {
   const form = $("#paste-form");
   if (form) form.reset();
+  const err = $("#paste-body-error");
+  if (err) { err.hidden = true; err.textContent = ""; }
+}
+
+function clearPasteBodyError() {
+  const err = $("#paste-body-error");
+  if (err && !err.hidden) { err.hidden = true; err.textContent = ""; }
 }
 
 /* Runs the pasted email through the exact same pipeline as a dropped .eml —
@@ -1129,7 +1145,14 @@ async function submitPaste(e) {
   const filesInput = $("#paste-files");
   const files = Array.from((filesInput && filesInput.files) || []);
 
-  if (!body) { toast("Email text is required."); return; }
+  if (!body) {
+    const err = $("#paste-body-error");
+    if (err) { err.hidden = false; err.textContent = "Email text is required."; }
+    const ta = $("#paste-body");
+    if (ta) ta.focus();
+    return;
+  }
+  clearPasteBodyError();
   if (files.length > 4) { toast("Attach up to 4 files."); return; }
 
   clearUploadPanels();
@@ -1148,11 +1171,14 @@ async function submitPaste(e) {
 
   try {
     const data = await submitProcessEmail(fd);
-    mergeMineResult(data);
+    const wasDuplicate = mergeMineResult(data);
     persistMineIfLocal();
     resetPasteForm();
     renderBoardView();
-    toast(`Email read${data.board && data.board.status === "MISMATCH" ? " · discrepancy found" : ""}`);
+    let msg = "Email read";
+    if (data.board && data.board.status === "MISMATCH") msg += " · discrepancy found";
+    if (wasDuplicate) msg += " · already in your mail";
+    toast(msg);
   } catch (err) {
     if (err && err.missingApi) {
       showUploadApiMissing();
@@ -1169,6 +1195,8 @@ async function submitPaste(e) {
 function initPasteForm() {
   const form = $("#paste-form");
   if (form) form.addEventListener("submit", submitPaste);
+  const bodyInput = $("#paste-body");
+  if (bodyInput) bodyInput.addEventListener("input", clearPasteBodyError);
 }
 
 /* ── Accounts ───────────────────────────────────────────────────
@@ -1203,7 +1231,10 @@ function renderAccountChip() {
     $("#account-email-text").textContent = ACCOUNT.user.email;
     $("#account-email-btn").title = ACCOUNT.user.email;
   } else {
-    signinBtn.hidden = false;
+    // The #/account page already has its own "Sign in" / "Create account"
+    // form front and centre — a second, identical "Sign in" button in the
+    // topbar just confuses testers, so it hides while that page is open.
+    signinBtn.hidden = location.hash.startsWith("#/account");
     wrap.hidden = true;
     closeAccountMenu();
   }
@@ -1375,6 +1406,10 @@ async function submitAccountForm(e) {
     setSourceKey("mine");
     location.hash = "#/board";
     route();
+    // Focus lands on a heading, not left behind on the submit button the
+    // route just hid.
+    const heading = $("#board-heading");
+    if (heading) heading.focus();
     toast(ACCOUNT_MODE === "signup" ? "Account created." : "Signed in.");
   } catch {
     errHost.hidden = false;
@@ -1421,6 +1456,8 @@ function route() {
     active = "account";
     views.account.hidden = false;
     setAccountMode("signup");
+    const emailInput = $("#account-email-input");
+    if (emailInput) emailInput.focus();
   } else if (h.startsWith("#/board")) {
     active = "board";
     views.board.hidden = false;
@@ -1438,6 +1475,7 @@ function route() {
     const on = route === active || (route === "board" && active === "review");
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
+  renderAccountChip();
   window.scrollTo(0, 0);
 }
 

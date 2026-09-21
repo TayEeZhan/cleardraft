@@ -9,7 +9,7 @@
   --surface-2:  #F6F8FB;
   --ink:        #0D1520;
   --ink-2:      #4A5563;
-  --ink-3:      #7A8696;
+  --ink-3:      #5E6A7A;
   --rule:       #DCE2EA;
   --rule-2:     #C3CCD8;
   --marine:     #14395E;
@@ -94,7 +94,7 @@ a { color: inherit; }
 .account-btn {
   font-family: inherit; font-size: 13px; font-weight: 600; color: var(--ink);
   background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: var(--r);
-  padding: 8px 14px; min-height: 40px; cursor: pointer; white-space: nowrap;
+  padding: 8px 14px; min-height: 44px; cursor: pointer; white-space: nowrap;
 }
 .account-btn:hover { background: var(--surface); border-color: var(--ink-3); }
 .account-user-wrap[hidden] { display: none; }
@@ -109,7 +109,7 @@ a { color: inherit; }
 .account-menu-item {
   display: block; width: 100%; text-align: left; font-family: inherit; font-size: 13.5px;
   color: var(--ink); background: none; border: 0; border-radius: 4px; padding: 10px;
-  min-height: 40px; cursor: pointer;
+  min-height: 44px; cursor: pointer;
 }
 .account-menu-item:hover { background: var(--surface-2); }
 
@@ -348,7 +348,8 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 .btn {
   font-family: inherit; font-size: 14px; font-weight: 600;
   padding: 9px 18px; border-radius: var(--r); cursor: pointer;
-  border: 1px solid transparent;
+  border: 1px solid transparent; min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .btn-primary { background: var(--ink); color: #fff; }
 .btn-primary:hover { background: #1c2836; }
@@ -409,7 +410,7 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 }
 
 /* ── mail + re-check additions ─────────────────────────────── */
-a.btn { text-decoration: none; display: inline-block; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
 .btn-quiet { background: var(--surface); color: var(--ink); border-color: var(--rule-2); }
 .btn-quiet:hover { background: var(--surface-2); }
 .reply-past { border-top: 1px solid var(--rule); }
@@ -475,7 +476,7 @@ a.btn { text-decoration: none; display: inline-block; }
 .field-input {
   font-family: inherit; font-size: 13.5px; color: var(--ink);
   padding: 9px 11px; border: 1px solid var(--rule-2); border-radius: var(--r);
-  background: var(--surface); resize: vertical;
+  background: var(--surface); resize: vertical; min-height: 44px;
 }
 .field-input:focus-visible { outline: 2px solid var(--marine); outline-offset: 1px; }
 
@@ -521,7 +522,10 @@ a.btn { text-decoration: none; display: inline-block; }
 .account-form { max-width: 420px; display: flex; flex-direction: column; gap: 16px; margin-top: 20px; }
 .password-wrap { position: relative; display: flex; align-items: center; }
 .password-wrap .field-input { flex: 1 1 auto; padding-right: 62px; }
-.password-toggle { position: absolute; right: 10px; min-height: 32px; padding: 2px 0; }
+.password-toggle {
+  position: absolute; right: 10px; min-height: 44px; min-width: 44px; padding: 2px 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
 .account-error {
   font-size: 13px; color: var(--mismatch); background: var(--mismatch-bg);
   border: 1px solid #F0C3BF; border-radius: var(--r); padding: 10px 12px;
@@ -618,8 +622,14 @@ a.btn { text-decoration: none; display: inline-block; }
 .orig-email summary {
   cursor: pointer; font-size: 13.5px; font-weight: 500; color: var(--ink-2);
   padding: 12px 16px; min-height: 44px; display: flex; align-items: center;
-  background: var(--surface-2);
+  background: var(--surface-2); list-style: none;
 }
+.orig-email summary::-webkit-details-marker { display: none; }
+.orig-email summary::after {
+  content: "\25B8"; margin-left: auto; color: var(--ink-3); font-size: 12px;
+  transition: transform .15s;
+}
+.orig-email[open] summary::after { transform: rotate(90deg); }
 .orig-email summary:hover { color: var(--ink); }
 .orig-email[open] summary { border-bottom: 1px solid var(--rule); }
 .orig-body { padding: 14px 16px; }
@@ -648,29 +658,48 @@ a.btn { text-decoration: none; display: inline-block; }
 @media (max-width: 860px) { .cmp-row { grid-template-columns: 1fr 80px 80px; } }
 
 /* ── phone top bar ─────────────────────────────────────────────
-   Three nav links plus a topbar chip were 444px wide on a 375px phone, so
-   every page scrolled sideways. The account control stays (a clerk acts on
-   it — sign in, sign out) but shrinks; the nav tightens around it. */
+   Below 640px the topbar becomes two rows instead of squeezing (and
+   eventually hiding) nav links into one: row one is the brand and the
+   account control, row two is all four nav links sharing the width evenly.
+   Nothing is ever hidden — every page stays one tap away on every phone. */
 @media (max-width: 860px) {
   .nav { gap: 2px; }
   .nav-link { padding: 7px 9px; font-size: 13.5px; white-space: nowrap; }
+}
+@media (max-width: 640px) {
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 10px 12px 0;
+    gap: 0;
+  }
+  .brand { order: 1; }
+  .account { order: 2; margin-left: auto; padding-left: 12px; }
+  .nav {
+    order: 3;
+    flex: 1 0 100%;
+    width: 100%;
+    margin: 10px 0 0;
+    gap: 0;
+    border-top: 1px solid var(--rule);
+  }
+  .nav-link {
+    flex: 1;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center;
+    min-height: 44px;
+    padding: 8px 4px;
+    border-radius: 0;
+    white-space: normal;
+    line-height: 1.2;
+  }
 }
 @media (max-width: 420px) {
   .brand-name { font-size: 16px; }
   .mark { display: none; }
 }
 @media (max-width: 380px) {
-  .topbar { padding: 0 10px; gap: 6px; }
-  .nav { gap: 0; }
-  /* The logo already links home; one fewer choice keeps the nav on one line. */
-  .nav-link[data-route="home"] { display: none; }
-  .nav-link { padding: 7px 7px; font-size: 12.5px; }
-  /* A permanent account control (unlike the old diagnostic-only chip it
-     replaced) has to keep its room here too, so on the very narrowest
-     phones Accuracy — reachable from the home page's proof line — folds
-     away as well, the same trade the logo already makes for Home. */
-  .nav-link[data-route="accuracy"] { display: none; }
-  .account { padding-left: 6px; }
+  .nav-link { font-size: 12px; padding: 8px 2px; }
   .account-email-btn { max-width: 56px; }
 }
 

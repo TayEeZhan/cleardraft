@@ -72,7 +72,7 @@
 
   <section id="view-board" class="view">
     <div class="view-head">
-      <h1>Inbox</h1>
+      <h1 id="board-heading" tabindex="-1">Inbox</h1>
       <p class="lede" id="board-lede">Loading…</p>
     </div>
 
@@ -112,6 +112,7 @@
           <label class="field">
             <span class="field-label">Email text</span>
             <textarea id="paste-body" class="field-input" rows="8" spellcheck="true" required></textarea>
+            <div class="account-error" id="paste-body-error" aria-live="polite" hidden></div>
           </label>
           <label class="field">
             <span class="field-label">From (optional)</span>
