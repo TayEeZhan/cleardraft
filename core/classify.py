@@ -225,19 +225,39 @@ def _comparison_rule(text: str) -> Classification | None:
     )
 
 
+class _EvidenceNotFound(ValueError):
+    """The model's quoted evidence is not in the email - a gate rejection."""
+
+
 def classify(email: Email, *, use_model: bool = True) -> Classification:
     """Rules first, model only on the residue. Never raises."""
-    hit = classify_by_rule(email)
+    try:
+        hit = classify_by_rule(email)
+    except Exception:
+        # "Never raises" has to hold for the rule half too. A rule that blows
+        # up on one odd email degrades that email to unclassified - it does not
+        # end a 520-email batch.
+        hit = None
     if hit is not None and hit.confidence >= CONFIDENCE_FLOOR:
         return hit
 
     if use_model:
+        from adapters.model import STATS, ModelUnavailable
+
         try:
             return classify_by_model(email)
-        except Exception:
-            # ModelUnavailable, a transient provider failure, malformed JSON,
-            # or an unfinished adapter must not terminate the 520-email batch.
+        except ModelUnavailable:
+            # No key, or the call failed; complete_json already counted the
+            # failure. Fall through to the unclassified result below.
             pass
+        except _EvidenceNotFound:
+            # The model quoted text that is not in the email. Same gate as
+            # extraction, counted the same way, so it is visible to judges.
+            STATS.gate_rejections += 1
+        except Exception:
+            # Malformed or out-of-range answer. The call itself was counted as
+            # a success inside complete_json, so count the rejection here.
+            STATS.failures += 1
 
     return hit or Classification(
         category="GENERAL",
@@ -305,8 +325,12 @@ def classify_by_model(email: Email) -> Classification:
         raise ValueError("model returned an incompatible intent")
     if not isinstance(evidence, str) or not evidence.strip():
         raise ValueError("model returned empty evidence")
-    if evidence.casefold() not in _current_message(email).casefold():
-        raise ValueError("model evidence does not appear in the email")
+    from core.extract import verify_against_source
+
+    # The same gate extraction uses: casefolded, whitespace-collapsed, never
+    # fuzzy. A bare casefold rejected genuine quotes the model re-wrapped.
+    if not verify_against_source(evidence, _current_message(email)):
+        raise _EvidenceNotFound("model evidence does not appear in the email")
     if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
         raise ValueError("model returned invalid confidence")
     confidence = float(confidence)

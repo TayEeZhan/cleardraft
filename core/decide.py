@@ -5,6 +5,7 @@ OWNER: Ee Zhan.
 PRECEDENCE. Escalation beats everything. We would rather hand a clerk a case
 we could not decide than hand them a confident wrong answer.
 
+  0. nobody could tell what it wants      -> NEEDS_REVIEW / unclassified
   1. category is not BL_COMPARISON        -> OK, nothing to compare
   2. intent is "compare" and fewer than
      two attachments                      -> NEEDS_REVIEW / missing_attachment
@@ -64,6 +65,24 @@ def _decide(
     comparisons: "tuple[FieldComparison, ...]",
 ) -> Decision:
     decided_by = _decided_by(classification)
+
+    # 0. Nobody could tell what this email wants: no rule matched and the model
+    # was unavailable or its answer failed verification. Passing it as OK would
+    # be a confident wrong answer - the one thing this system promises never to
+    # give - so it goes to a person. Never fires on the sample inbox (the rules
+    # cover all 520); it exists for unseen mail when the model is down.
+    if classification.intent == "unknown" and classification.confidence == 0.0:
+        return Decision(
+            email_id=email.email_id,
+            category=classification.category,
+            status="NEEDS_REVIEW",
+            review_reason="unclassified",
+            has_defect=False,
+            defect_fields=(),
+            decided_by=decided_by,
+            comparisons=comparisons,
+            rationale="could not tell what this email is asking for",
+        )
 
     # 1. Not a comparison email at all -> nothing to compare.
     if classification.category != "BL_COMPARISON":

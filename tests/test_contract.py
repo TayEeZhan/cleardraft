@@ -336,3 +336,32 @@ def test_recheck_reply_names_the_newly_broken_field() -> None:
     assert "Container Count" in text and "now wrong" in text
     assert "Notify Party" in text
     assert "OK to proceed" not in text
+
+
+# ---------------------------------------------------------------------------
+# From the silent-failure review of the model path.
+# ---------------------------------------------------------------------------
+def test_unclassifiable_email_goes_to_a_human_not_ok() -> None:
+    """No rule matched and the model could not answer. Returning OK here was a
+    confident wrong answer - the one thing this system promises never to give."""
+    from core.classify import classify
+    from core.decide import decide
+
+    email = Email(email_id="x", sender="a@b.com", subject="Hello",
+                  body="Can you take a look?")
+    c = classify(email, use_model=True)          # model is off in tests
+    d = decide(email, c, None, None, ())
+    assert d.status == "NEEDS_REVIEW"
+    assert d.review_reason == "unclassified"
+    assert d.has_defect is False
+
+
+def test_classifier_evidence_gate_matches_the_extraction_gate() -> None:
+    """A genuine quote the model re-wrapped across lines must pass; a quote
+    that is not in the email must not. Same rule as field extraction."""
+    from core.extract import verify_against_source
+
+    body = "Please verify the draft
+bill of lading against our SI."
+    assert verify_against_source("verify the draft bill of lading", body)
+    assert not verify_against_source("please cancel the invoice", body)

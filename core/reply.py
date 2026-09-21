@@ -56,6 +56,7 @@ REVIEW_REASON_PHRASES: dict[str, str] = {
     "unreadable": "one of the documents could not be read",
     "wrong_doc_type": "one of the documents was not the expected SI/BL type",
     "missing_value": "a required field was missing or blank in the documents",
+    "unclassified": "we could not tell what this email is asking for",
 }
 
 #: "Hi Najiha," / "Dear Hari," -> capture the first name.

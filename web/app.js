@@ -44,6 +44,7 @@ const REASON = {
   wrong_doc_type: "not an SI/BL pair",
   unreadable: "document could not be read",
   missing_value: "a field was blank",
+  unclassified: "could not tell what it wants",
 };
 
 function renderBoard() {

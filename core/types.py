@@ -22,7 +22,12 @@ Category = Literal[
 ]
 Status = Literal["OK", "MISMATCH", "NEEDS_REVIEW"]
 ReviewReason = Literal[
-    "wrong_doc_type", "missing_attachment", "unreadable", "missing_value"
+    "wrong_doc_type", "missing_attachment", "unreadable", "missing_value",
+    # Ours, not the organiser's: no rule matched and the model could not answer
+    # (no key, timeout, or an answer that failed verification). The organiser
+    # scorer counts only its own four reasons and ignores this one, so it costs
+    # nothing there - and it keeps "we do not know" from becoming a silent OK.
+    "unclassified",
 ]
 DocKind = Literal["SI", "BL", "OTHER", "UNREADABLE"]
 DecidedBy = Literal["rule", "model"]
