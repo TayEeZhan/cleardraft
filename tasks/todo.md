@@ -53,9 +53,9 @@ extraction and classification are.
 - [x] Target: end-to-end rate above 0.90 -> reached 1.00
 
 ## Phase 3 — product  (Mon 16:00-22:00)
-- [ ] FastAPI service
-- [ ] Next.js UI: board, review, accuracy
-- [ ] Deploy to Vercel and Render
+- [x] FastAPI service: /api/health, /api/check (Vercel Python function)
+- [x] Web UI (static HTML/CSS/JS): board, review, accuracy, live checker
+- [x] Deploy to Vercel: https://cleardraft-one.vercel.app
 - [ ] `docker-compose.yml` for reproducibility
 
 ## Phase 4 — review  (Mon 22:00-Tue 02:00)

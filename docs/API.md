@@ -2,12 +2,8 @@
 
 **Spec owner: Ee Zhan · Consumer: the web UI**
 
-This is the agreed shape. Build to it exactly and the UI will work the first
-time. If something here is wrong or awkward, say so and we change this document
-first, not the code.
-
-Everything is JSON over HTTP. No authentication — this is a demo running on
-public sample data.
+Everything is JSON over HTTP (`POST /api/check` is `multipart/form-data` in,
+JSON out). No authentication — this is a demo running on public sample data.
 
 ---
 
@@ -15,24 +11,19 @@ public sample data.
 
 **Vercel Python serverless functions, same project as the UI.**
 
-Netlify is not an option: Netlify Functions run JavaScript, TypeScript and Go
-only, and this entire pipeline is Python (`pdfplumber`, `openpyxl`,
-`python-docx`). Vercel has a real Python runtime, so one repo deploys both the
-site and the API, from one URL, with no CORS configuration at all.
-
-Layout Vercel expects:
-
 ```
 api/
   index.py          <- exposes `app`, a FastAPI instance
-  requirements.txt  <- the API's own dependencies
-vercel.json         <- serves web/ as the site; rewrites /api/* to api/index.py
-
-Vercel auto-detects any .py file under api/ as a Python function, so nothing
-in vercel.json needs to change when you add api/index.py. Until it exists,
-/api/* returns 404 and the UI falls back to web/public/data.json on its own.
-web/                <- the Next.js UI
+vercel.json         <- serves web/ as the site; rewrites /api/(.*) to /api/index
+web/                <- static HTML + CSS + one ES module (web/app.js). No
+                        build step, no framework. Deployed by pointing Vercel's
+                        outputDirectory at web/ (see vercel.json).
 ```
+
+Vercel auto-detects `api/index.py` as a Python function; `vercel.json`'s
+rewrite sends every `/api/*` request to it, and the function receives the
+original path, so the routes below are registered with the full `/api/...`
+prefix inside `api/index.py` itself.
 
 ---
 
@@ -40,11 +31,10 @@ web/                <- the Next.js UI
 
 **Do not re-implement any pipeline logic in the API.** The API is a transport
 layer. It imports `core` and calls it. Every rule about classification,
-comparison and escalation already lives in `core/` and is covered by 40 tests.
+comparison and escalation lives in `core/` and is covered by the test suite
+(`python -m pytest tests/ -q`).
 
 ```python
-from adapters.inbox import LocalInbox
-from core import pipeline
 from core.classify import classify
 from core.compare import compare
 from core.decide import decide
@@ -57,15 +47,29 @@ something, it belongs in `core/decide.py`, not in the API.
 
 ---
 
-## Performance note, read before you start
+## Built vs planned
 
-A full 520-email run takes about **4 seconds** end to end, because it opens 250
-attachments. That is fine as a one-off and far too slow per request.
+Two endpoints are implemented and deployed:
 
-**Compute once at startup, serve from memory.** Build the full result set when
-the module loads, hold it in a dict keyed by `email_id`, and have every
-endpoint read from that dict. Serverless cold starts make this a few seconds on
-the first request and instant thereafter.
+| Endpoint | Status |
+|---|---|
+| `GET /api/health` | Built |
+| `POST /api/check` | Built — this is the live checker behind the UI's `#/check` page |
+
+Everything else originally sketched for this contract is **planned, not
+built**: `GET /api/emails`, `GET /api/emails/{email_id}`, `GET /api/stats`,
+`GET /api/attachments/{path}`, `POST /api/recheck/{email_id}`. In their
+place, the UI's Inbox and Accuracy screens (`#/board`, `#/accuracy`) read
+**`web/public/data.json`** — a full-run snapshot over the whole 520-email
+inbox, produced by `python scripts/export_ui_data.py`. The board, per-email
+detail, and accuracy numbers all come from that one exported file, not from a
+live per-request API. `web/app.js` tries `/api/emails` first purely as a
+forward-compatible fallback path and falls back to the snapshot — today that
+fetch always misses, by design, because the endpoint does not exist yet.
+
+The rest of this document describes the two built endpoints. The bullet list
+at the end names the planned ones and what they were meant to do, so the gap
+is explicit rather than silently dropped.
 
 ---
 
@@ -73,95 +77,69 @@ the first request and instant thereafter.
 
 ### `GET /api/health`
 
-Liveness plus enough to prove the pipeline really ran.
+Liveness plus enough to prove the pipeline can actually run.
 
 ```json
 {
   "status": "ok",
-  "emails": 520,
-  "attachments": 250,
   "model_available": false,
-  "pipeline_ready": true
+  "parsers": ["txt", "pdf", "xlsx", "docx"],
+  "missing_parsers": {}
 }
 ```
 
-`model_available` is `adapters.model.available()`. It is honest about whether
-an API key is configured; the UI shows it on the accuracy screen.
+`model_available` is `adapters.model.available()` — honest about whether an
+API key is configured. `parsers` / `missing_parsers` come from
+`core.parsers.supported()` / `core.parsers.MISSING_PARSERS`: an optional
+third-party library that failed to import shows up here instead of failing
+silently the first time someone uploads that file type.
 
 ---
 
-### `GET /api/emails`
+### `POST /api/check`
 
-The board. Every email, one row each, small enough to send in one go.
+The live checker. Upload one Shipping Instruction and one draft Bill of
+Lading, get back the same 7-row verdict a clerk would produce by hand. This
+is what the UI's `#/check` page calls.
 
-Optional query parameters:
-- `status` — `OK` | `MISMATCH` | `NEEDS_REVIEW`
-- `category` — `BL_COMPARISON` | `SI_REQUEST` | `INVOICE_QUERY` | `GENERAL` | `SPAM`
+**Request** — `multipart/form-data`:
 
-```json
-{
-  "total": 520,
-  "counts": {
-    "needs_check": 129,
-    "mismatch": 46,
-    "needs_review": 22,
-    "cleared": 323
-  },
-  "emails": [
-    {
-      "email_id": "email_004",
-      "subject": "TO CONFIRM DOCS _ 5ALT-01226 _ ...",
-      "from": "aziztz@safqa.co.ke",
-      "reference": "5ALT-01226",
-      "category": "BL_COMPARISON",
-      "status": "MISMATCH",
-      "review_reason": null,
-      "has_defect": true,
-      "defect_fields": ["consignee", "notify_party"],
-      "attachment_count": 2,
-      "decided_by": "rule"
-    }
-  ]
-}
-```
+| Field | Required | Notes |
+|---|---|---|
+| `si` | yes | file, one of `.txt` `.pdf` `.xlsx` `.docx`, ≤ 2 MB |
+| `bl` | yes | file, same constraints |
+| `subject` | no | if given (with or without `body`), the email-reading step runs and is reported back |
+| `body` | no | as above |
 
-`reference` is the shipment reference, already extracted by
-`core.reply._reference(email)`. Use that function — do not write another regex.
+The upload is always treated as an explicit request to compare — the web
+form does not run the intent classifier to decide whether to compare, it
+only optionally runs it to *report* what an email with this subject/body
+would have been read as.
 
-The four `counts` keys map exactly onto the four board tabs.
+**400 responses**, shape `{"error": "...", "detail": "..."}`:
 
----
+| `error` | When |
+|---|---|
+| `missing_file` | `si` or `bl` was not attached |
+| `unsupported_extension` | file extension is not one of the four supported formats |
+| `file_too_large` | file exceeds 2 MB (checked by reading one byte past the cap, so an oversized upload is never held fully in memory) |
 
-### `GET /api/emails/{email_id}`
-
-The review screen. Everything needed to render one case.
+**200 response** (fields trimmed for brevity — see `api/index.py` for the
+exact shape):
 
 ```json
 {
-  "email_id": "email_004",
-  "subject": "TO CONFIRM DOCS _ 5ALT-01226 _ ...",
-  "from": "aziztz@safqa.co.ke",
-  "body": "Hi Mitchelle, ...",
   "reference": "5ALT-01226",
-  "category": "BL_COMPARISON",
-  "intent": "compare",
+  "email_reading": null,
   "status": "MISMATCH",
   "review_reason": null,
   "rationale": "2 of 7 fields differ: consignee, notify_party",
+  "category": "BL_COMPARISON",
   "decided_by": "rule",
+  "defect_fields": ["consignee", "notify_party"],
   "documents": {
-    "si": {
-      "path": "attachments/email_004_SI.txt",
-      "kind": "SI",
-      "readable": true,
-      "error": null
-    },
-    "bl": {
-      "path": "attachments/email_004_BL.txt",
-      "kind": "BL",
-      "readable": true,
-      "error": null
-    }
+    "si": { "name": "email_004_SI.txt", "kind": "SI", "readable": true, "error": null },
+    "bl": { "name": "email_004_BL.txt", "kind": "BL", "readable": true, "error": null }
   },
   "comparisons": [
     {
@@ -169,112 +147,55 @@ The review screen. Everything needed to render one case.
       "label": "Consignee",
       "matched": false,
       "undecidable": false,
-      "si": {
-        "value": "EAST BRIGHT FZ-LLC",
-        "raw": "CONSIGNEE: EAST BRIGHT FZ-LLC",
-        "line_no": 6,
-        "source": "attachments/email_004_SI.txt"
-      },
-      "bl": {
-        "value": "UAB NOVAKOPA",
-        "raw": "Consignee (Non-Negotiable): UAB NOVAKOPA",
-        "line_no": 7,
-        "source": "attachments/email_004_BL.txt"
-      }
+      "si": { "value": "EAST BRIGHT FZ-LLC", "raw": "...", "line_no": 6, "label": "Consignee", "decided_by": "rule", "source": "email_004_SI.txt" },
+      "bl": { "value": "UAB NOVAKOPA", "raw": "...", "line_no": 7, "label": "Consignee (Non-Negotiable)", "decided_by": "rule", "source": "email_004_BL.txt" }
     }
   ],
-  "reply_draft": "Hi Mitchelle, ..."
+  "reply_draft": "Hi team, ...",
+  "model": { "available": false, "calls": 0, "gate_rejections": 0, "input_tokens": 0, "output_tokens": 0 },
+  "seconds": 0.04,
+  "subject": "",
+  "from": ""
 }
 ```
 
-Rules for `comparisons`:
-- **Always exactly 7 entries, always in `core.types.COMPARE_FIELDS` order.**
-  `core.compare.compare()` already guarantees this. Do not filter or reorder —
-  the UI pins mismatches to the top itself.
-- `label` is the human name. Use `core.reply.FIELD_LABELS` — it already maps
-  `notify_party` to `Notify Party` and `gross_weight_kg` to `Gross Weight (kg)`.
-- `si` or `bl` may be `null` when that document had no such field.
-- `raw` and `line_no` are the proof. The UI reveals them on click. Never drop
-  them; they are the whole "show your working" feature.
-
-For a non-comparison email (`SPAM`, `GENERAL`, …) return the same shape with
-`comparisons: []` and both `documents` entries `null`.
-
----
-
-### `GET /api/stats`
-
-The accuracy screen.
-
-```json
-{
-  "totals": { "emails": 520, "compared": 129, "defects_found": 46 },
-  "categories": {
-    "BL_COMPARISON": 220, "SI_REQUEST": 125,
-    "INVOICE_QUERY": 75, "GENERAL": 60, "SPAM": 40
-  },
-  "defect_fields": {
-    "container_count": 19, "port_of_discharge": 13, "gross_weight_kg": 12,
-    "notify_party": 8, "consignee": 7, "shipper": 7, "port_of_loading": 6
-  },
-  "escalations": {
-    "missing_attachment": 5, "wrong_doc_type": 5,
-    "unreadable": 6, "missing_value": 6
-  },
-  "decisions": { "by_rule": 520, "by_model": 0, "rule_pct": 1.0 },
-  "model": {
-    "available": false,
-    "calls": 0, "input_tokens": 0, "output_tokens": 0, "failures": 0
-  },
-  "runtime_seconds": 4.1
-}
-```
-
-`decisions.rule_pct` and the `model` block come from `adapters.model.STATS`.
-This is the "most decisions were not made by AI" evidence — it must be measured
-live, never hardcoded.
+Notes:
+- **Always exactly 7 entries in `comparisons`**, in `core.types.COMPARE_FIELDS`
+  order, produced by `core.compare.compare()` unchanged — same rule as the
+  batch pipeline.
+- `model` is a **per-request delta** on `adapters.model.STATS`: the counters
+  before minus the counters after this one call, so a busy deployment's
+  running totals never leak into one clerk's single check.
+- The model, when consulted at all, runs **only on the SI/BL documents
+  themselves**, for fields the format parsers could not locate — same
+  verbatim-verification gate as the batch pipeline (`core/extract.py`). It
+  never sees the uploaded `subject`/`body` for extraction, only for the
+  optional `email_reading` classification.
+- `email_reading` is `null` unless `subject` or `body` was actually supplied.
 
 ---
 
-### `GET /api/attachments/{path}`
+## Planned, not built
 
-Serve an attachment's extracted **plain text** so the review screen can show
-the source document beside the table.
+These were the original spec for this contract. None of them exist as live
+endpoints today; the UI's Inbox and Accuracy screens get the same
+information from `web/public/data.json` instead (see "Built vs planned"
+above).
 
-```json
-{
-  "path": "attachments/email_004_SI.txt",
-  "kind": "SI",
-  "readable": true,
-  "text": "SHIPPING INSTRUCTION ...",
-  "error": null
-}
-```
+- **`GET /api/emails`** — the board: every email in the 520-email inbox, one
+  row each, with `counts` for the four board tabs.
+- **`GET /api/emails/{email_id}`** — the review screen for one email: full
+  detail, 7 comparison rows, reply draft.
+- **`GET /api/stats`** — the accuracy screen: category/defect/escalation
+  breakdowns, `rule_pct`, live model counters.
+- **`GET /api/attachments/{path}`** — an inbox attachment's extracted plain
+  text, for showing the source document beside the table.
+- **`POST /api/recheck/{email_id}`** — re-run one email live rather than
+  serving a cached answer.
 
-Reject any path that does not start with `attachments/` or that contains `..`.
-It is a public endpoint reading from disk; treat the path as hostile.
-
----
-
-### `POST /api/recheck/{email_id}` — optional, only if time allows
-
-Re-run one email through the pipeline and return the same payload as
-`GET /api/emails/{email_id}`. Useful for the demo video: show it running live
-rather than serving a cached answer. Skip it if anything else is unfinished.
-
----
-
-## Errors
-
-Consistent shape, always:
-
-```json
-{ "error": "email_id not found", "detail": "email_999" }
-```
-
-Use `404` for a missing email or attachment, `400` for a bad path, `500` only
-for a genuine crash. The pipeline itself does not raise — if you are catching
-exceptions from `core`, something is wrong and it should be fixed there.
+If any of these get built, they should read from the same `core` functions
+`api/index.py` already imports, exactly as `scripts/export_ui_data.py` does
+for the batch snapshot — no pipeline logic re-implemented in the route.
 
 ---
 
@@ -289,12 +210,14 @@ curl localhost:8000/api/health
 ```
 
 ```bash
-curl localhost:8000/api/emails/email_004
+curl -F si=@data/attachments/email_004_SI.txt \
+     -F bl=@data/attachments/email_004_BL.txt \
+     localhost:8000/api/check
 ```
 
-`email_004` is the useful one to eyeball: a real mismatch with two defect
-fields. Confirm all 7 comparison rows come back, two with `matched: false`,
-and a populated `reply_draft`.
+`email_004`'s SI/BL pair is the useful one to eyeball: a real mismatch with
+two defect fields (`consignee`, `notify_party`). Confirm all 7 comparison
+rows come back, two with `matched: false`, and a populated `reply_draft`.
 
 Then have the reviewer look at it:
 

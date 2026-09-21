@@ -2,6 +2,13 @@
 
     python scripts/run_pipeline.py --data data --out out/submission.json
 
+Or, against the organiser's docker server instead of a local folder:
+
+    python scripts/run_pipeline.py --server http://localhost:8080 --out out/submission.json
+
+`--data` and `--server` are mutually exclusive. Neither given falls back to
+`--data data`, unchanged from before `--server` existed.
+
 Stages that are still stubs fall back to a SAFE DEFAULT (GENERAL / OK) and are
 counted in the summary. That is deliberate: the plumbing is provably correct
 from hour one, and each owner's progress shows up as the stub count dropping.
@@ -16,7 +23,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from adapters.inbox import LocalInbox                       # noqa: E402
+from adapters.inbox import HttpInbox, InboxSource, LocalInbox  # noqa: E402
 from core import pipeline                                    # noqa: E402
 from core.types import (                                     # noqa: E402
     Classification,
@@ -47,7 +54,7 @@ def _fallback_classify(email: Email) -> Classification:
         )
 
 
-def _make_reader(inbox: LocalInbox):
+def _make_reader(inbox: InboxSource):
     def read(rel: str) -> ExtractedDoc:
         try:
             from core.extract import extract
@@ -101,11 +108,23 @@ def _fallback_decide(
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="data")
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument(
+        "--data", default=None,
+        help="local data directory with inbox/ + attachments/ (default: 'data')",
+    )
+    group.add_argument(
+        "--server", default=None,
+        help="organiser HTTP server base URL, e.g. http://localhost:8080",
+    )
     ap.add_argument("--out", default="out/submission.json")
     args = ap.parse_args()
 
-    inbox = LocalInbox(args.data)
+    inbox: InboxSource
+    if args.server:
+        inbox = HttpInbox(args.server)
+    else:
+        inbox = LocalInbox(args.data or "data")
     read_doc = _make_reader(inbox)
 
     started = time.time()

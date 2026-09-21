@@ -101,24 +101,16 @@ function stateOf(c) {
   return c.matched ? "match" : "mismatch";
 }
 
-function renderReview(id) {
-  const d = DATA.detail[id];
-  const host = $("#review-body");
-  host.replaceChildren();
-  if (!d) { host.append(el("div", "empty", "Not found.")); return; }
+/* Verdict + seam table + reply card, built from any object shaped like a
+   DATA.detail[id] entry (status, review_reason, rationale, defect_fields,
+   comparisons, reply_draft, subject, from, ...). Shared by the case review
+   screen and the live "Check a pair" result, so the two never drift apart. */
+function verdictKind(d) {
+  return d.status === "MISMATCH" ? "mismatch" : d.status === "NEEDS_REVIEW" ? "review" : "match";
+}
 
-  const head = el("div", "case-head");
-  head.innerHTML = `
-    <div class="ref">${esc(d.reference)}</div>
-    <h2>${esc(d.subject)}</h2>
-    <div class="case-meta">
-      <span>${esc(d.from)}</span>
-      <span>${esc(d.category.replace(/_/g, " ").toLowerCase())}</span>
-      <span>decided by ${esc(d.decided_by)}</span>
-    </div>`;
-  host.append(head);
-
-  const kind = d.status === "MISMATCH" ? "mismatch" : d.status === "NEEDS_REVIEW" ? "review" : "match";
+function renderVerdict(d, host, { reply = true } = {}) {
+  const kind = verdictKind(d);
   const icon = { mismatch: "≠", review: "?", match: "✓" }[kind];
   const n = d.defect_fields.length;
   const title = {
@@ -136,11 +128,32 @@ function renderReview(id) {
   host.append(v);
 
   if (d.comparisons.length) host.append(seamTable(d));
+  if (reply) host.append(replyCard(d, d.reply_draft, "Reply, ready to send", null));
+}
+
+function renderReview(id) {
+  const d = DATA.detail[id];
+  const host = $("#review-body");
+  host.replaceChildren();
+  if (!d) { host.append(el("div", "empty", "Not found.")); return; }
+
+  const head = el("div", "case-head");
+  head.innerHTML = `
+    <div class="ref">${esc(d.reference)}</div>
+    <h2>${esc(d.subject)}</h2>
+    <div class="case-meta">
+      <span>${esc(d.from)}</span>
+      <span>${esc(d.category.replace(/_/g, " ").toLowerCase())}</span>
+      <span>decided by ${esc(d.decided_by)}</span>
+    </div>`;
+  host.append(head);
+
   if (d.recheck) {
+    renderVerdict(d, host, { reply: false });
     host.append(recheckCard(d.recheck));
     host.append(replyCard(d, d.recheck.reply_draft, "Follow-up reply, ready to send", d.reply_draft));
   } else {
-    host.append(replyCard(d, d.reply_draft, "Reply, ready to send", null));
+    renderVerdict(d, host);
   }
 }
 
@@ -407,9 +420,164 @@ function challengePanel(c) {
   return p;
 }
 
+/* ── Check a pair ──────────────────────────────────────────────
+   Lets a judge upload their own SI/BL and run the real pipeline live,
+   via POST /api/check. The result is rendered with the exact same
+   renderVerdict() used by the case review screen. */
+const CHECK = { si: null, bl: null };
+
+const SAMPLE_SETS = {
+  discrepancies: { si: "samples/unseen_SI.txt", bl: "samples/unseen_BL.txt" },
+  inbox: { si: "samples/inbox_SI.txt", bl: "samples/inbox_BL.txt" },
+};
+
+function checkFilesReady() { return Boolean(CHECK.si && CHECK.bl); }
+
+function updateCheckSubmit() {
+  const btn = $("#check-submit");
+  if (btn) btn.disabled = !checkFilesReady();
+}
+
+function acceptCheckFile(key, zoneId, nameId, file) {
+  if (!file) return;
+  CHECK[key] = file;
+  $(`#${nameId}`).textContent = file.name;
+  $(`#${zoneId}`).dataset.filled = "true";
+  updateCheckSubmit();
+}
+
+function wireDropZone(zoneId, inputId, nameId, key) {
+  const zone = $(`#${zoneId}`);
+  const input = $(`#${inputId}`);
+  input.addEventListener("change", () => acceptCheckFile(key, zoneId, nameId, input.files[0]));
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.dataset.drag = "true"; });
+  zone.addEventListener("dragleave", () => { zone.dataset.drag = "false"; });
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.dataset.drag = "false";
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) acceptCheckFile(key, zoneId, nameId, file);
+  });
+}
+
+function checkResultHost() { return $("#check-result"); }
+
+function showCheckApiMissing() {
+  const host = checkResultHost();
+  host.replaceChildren();
+  const panel = el("div", "check-error");
+  panel.append(el("strong", null, "The live checker needs the API."));
+  const p = el("p", null, "It runs on the deployed site; locally start it with:");
+  panel.append(p);
+  panel.append(el("code", null, "python -m uvicorn api.index:app"));
+  host.append(panel);
+}
+
+function showCheckError(message) {
+  const host = checkResultHost();
+  host.replaceChildren();
+  const panel = el("div", "check-error");
+  panel.append(el("strong", null, "Could not check these documents."));
+  panel.append(el("p", null, message || "Something went wrong."));
+  host.append(panel);
+}
+
+function renderCheckResult(data) {
+  const host = checkResultHost();
+  host.replaceChildren();
+
+  const secs = typeof data.seconds === "number" ? data.seconds.toFixed(2) : "?";
+  const calls = data.model ? data.model.calls : 0;
+  const rejections = data.model ? data.model.gate_rejections : 0;
+  host.append(el("div", "check-meta", `read in ${secs}s · model calls ${calls} · ${rejections} answer${rejections === 1 ? "" : "s"} rejected by the gate`));
+
+  if (data.email_reading) {
+    const er = data.email_reading;
+    host.append(el("div", "check-meta", `The email reads as: ${String(er.category || "").toLowerCase()} / ${er.intent} (decided by ${er.decided_by})`));
+  }
+
+  renderVerdict(data, host);
+}
+
+async function runCheck() {
+  if (!checkFilesReady()) return;
+  const btn = $("#check-submit");
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  checkResultHost().replaceChildren();
+
+  const fd = new FormData();
+  fd.append("si", CHECK.si);
+  fd.append("bl", CHECK.bl);
+  const subject = $("#check-subject").value.trim();
+  const body = $("#check-body").value.trim();
+  if (subject) fd.append("subject", subject);
+  if (body) fd.append("body", body);
+
+  try {
+    const r = await fetch("/api/check", { method: "POST", body: fd });
+    if (r.status === 404 || r.status === 405) { showCheckApiMissing(); return; }
+    if (r.status === 400) {
+      const j = await r.json().catch(() => ({}));
+      showCheckError(j.error);
+      return;
+    }
+    if (!r.ok) {
+      // The API answered but failed. Saying "not deployed" here would send a
+      // judge looking for the wrong problem.
+      showCheckError(`The check failed on the server (HTTP ${r.status}). Try again, or use a sample pair.`);
+      return;
+    }
+    const data = await r.json();
+    renderCheckResult(data);
+  } catch {
+    showCheckApiMissing();
+  } finally {
+    btn.textContent = "Check these documents";
+    updateCheckSubmit();
+  }
+}
+
+async function loadSample(key) {
+  const set = SAMPLE_SETS[key];
+  if (!set) return;
+  try {
+    const [siBlob, blBlob] = await Promise.all([
+      fetch(set.si).then((r) => { if (!r.ok) throw new Error("sample missing"); return r.blob(); }),
+      fetch(set.bl).then((r) => { if (!r.ok) throw new Error("sample missing"); return r.blob(); }),
+    ]);
+    const siFile = new File([siBlob], set.si.split("/").pop(), { type: siBlob.type || "text/plain" });
+    const blFile = new File([blBlob], set.bl.split("/").pop(), { type: blBlob.type || "text/plain" });
+    acceptCheckFile("si", "drop-si", "name-si", siFile);
+    acceptCheckFile("bl", "drop-bl", "name-bl", blFile);
+    $("#sample-choice").hidden = true;
+    $("#use-sample").setAttribute("aria-expanded", "false");
+    await runCheck();
+  } catch {
+    showCheckError("Could not load the sample files.");
+  }
+}
+
+function initCheckPage() {
+  wireDropZone("drop-si", "file-si", "name-si", "si");
+  wireDropZone("drop-bl", "file-bl", "name-bl", "bl");
+
+  $("#check-form").addEventListener("submit", (e) => { e.preventDefault(); runCheck(); });
+
+  const sampleBtn = $("#use-sample");
+  const choice = $("#sample-choice");
+  sampleBtn.addEventListener("click", () => {
+    const willShow = choice.hidden;
+    choice.hidden = !willShow;
+    sampleBtn.setAttribute("aria-expanded", String(willShow));
+  });
+  $("#sample-discrepancies").addEventListener("click", () => loadSample("discrepancies"));
+  $("#sample-inbox").addEventListener("click", () => loadSample("inbox"));
+}
+
 function route() {
   const h = location.hash || "#/board";
-  const views = { board: $("#view-board"), review: $("#view-review"), accuracy: $("#view-accuracy") };
+  const views = { board: $("#view-board"), review: $("#view-review"), accuracy: $("#view-accuracy"), check: $("#view-check") };
   for (const v of Object.values(views)) v.hidden = true;
 
   let active = "board";
@@ -421,13 +589,17 @@ function route() {
     active = "accuracy";
     views.accuracy.hidden = false;
     renderAccuracy();
+  } else if (h.startsWith("#/check")) {
+    active = "check";
+    views.check.hidden = false;
   } else {
     views.board.hidden = false;
     renderBoard();
   }
 
   for (const a of document.querySelectorAll(".nav-link")) {
-    const on = (a.dataset.route === "accuracy") === (active === "accuracy");
+    const route = a.dataset.route;
+    const on = route === active || (route === "board" && active === "review");
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
   window.scrollTo(0, 0);
@@ -458,6 +630,7 @@ function toast(msg) {
   for (const b of document.querySelectorAll(".tab")) {
     b.addEventListener("click", () => setTab(b.dataset.tab));
   }
+  initCheckPage();
   addEventListener("hashchange", route);
   route();
 })();

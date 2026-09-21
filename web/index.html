@@ -22,6 +22,7 @@
   </div>
   <nav class="nav" aria-label="Views">
     <a href="#/board" data-route="board" class="nav-link">Inbox</a>
+    <a href="#/check" data-route="check" class="nav-link">Check a pair</a>
     <a href="#/accuracy" data-route="accuracy" class="nav-link">Accuracy</a>
   </nav>
   <div class="source" id="source-chip" title="Where this page is reading its results from">
@@ -62,6 +63,60 @@
   <section id="view-review" class="view" hidden>
     <a href="#/board" class="back">Back to inbox</a>
     <div id="review-body"></div>
+  </section>
+
+  <section id="view-check" class="view" hidden>
+    <div class="view-head">
+      <h1>Check a pair</h1>
+      <p class="lede">Upload a Shipping Instruction and a draft Bill of Lading. ClearDraft reads both and reports whether they agree.</p>
+    </div>
+
+    <form id="check-form" class="check-form" novalidate>
+      <div class="drop-grid">
+        <div class="drop-zone" id="drop-si" data-filled="false">
+          <input type="file" id="file-si" class="drop-input" accept=".txt,.pdf,.xlsx,.docx">
+          <label for="file-si" class="drop-label">
+            <span class="drop-title">Shipping Instruction</span>
+            <span class="drop-hint">.txt, .pdf, .xlsx, .docx — click or drop</span>
+            <span class="drop-filename" id="name-si"></span>
+          </label>
+        </div>
+        <div class="drop-zone" id="drop-bl" data-filled="false">
+          <input type="file" id="file-bl" class="drop-input" accept=".txt,.pdf,.xlsx,.docx">
+          <label for="file-bl" class="drop-label">
+            <span class="drop-title">Draft Bill of Lading</span>
+            <span class="drop-hint">.txt, .pdf, .xlsx, .docx — click or drop</span>
+            <span class="drop-filename" id="name-bl"></span>
+          </label>
+        </div>
+      </div>
+
+      <details class="email-details">
+        <summary>Add the email (optional)</summary>
+        <div class="email-fields">
+          <label class="field">
+            <span class="field-label">Subject</span>
+            <input type="text" id="check-subject" class="field-input" autocomplete="off">
+          </label>
+          <label class="field">
+            <span class="field-label">Body</span>
+            <textarea id="check-body" class="field-input" rows="4"></textarea>
+          </label>
+        </div>
+      </details>
+
+      <div class="check-actions">
+        <button type="submit" class="btn btn-primary" id="check-submit" disabled>Check these documents</button>
+        <button type="button" class="link-btn" id="use-sample" aria-expanded="false">No files? Use a sample pair</button>
+      </div>
+
+      <div class="sample-choice" id="sample-choice" hidden>
+        <button type="button" class="link-btn" id="sample-discrepancies">Sample with discrepancies</button>
+        <button type="button" class="link-btn" id="sample-inbox">Sample from the inbox</button>
+      </div>
+    </form>
+
+    <div id="check-result" class="check-result" aria-live="polite"></div>
   </section>
 
   <section id="view-accuracy" class="view" hidden>

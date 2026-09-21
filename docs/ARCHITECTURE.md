@@ -47,12 +47,13 @@ it. Nothing in the repository can send mail.
 
 ```
   +----------------------------------------------------------------+
-  |  web/         Next.js on Vercel                                 |
-  |               board, review screen, accuracy screen             |
+  |  web/         Static HTML + CSS + one ES module, on Vercel      |
+  |               no build step. board, review, accuracy, live      |
+  |               checker (#/check)                                 |
   +--------------------------------+-------------------------------+
                                    | HTTPS, JSON
   +--------------------------------v-------------------------------+
-  |  api/         FastAPI on Render                                 |
+  |  api/         FastAPI, Vercel Python serverless function        |
   |               thin transport layer, no business logic           |
   +--------------------------------+-------------------------------+
                                    | in-process calls
@@ -225,11 +226,23 @@ email a distinct shipment, so the timeline could not be demonstrated anyway.
 
 ### ADR-007 — The inbox is a port.
 
-**Decision.** `adapters/inbox.py` defines `InboxSource`. `LocalInbox` reads a
-folder. A Microsoft Graph or IMAP adapter is the same interface.
+**Decision.** `adapters/inbox.py` defines `InboxSource`. Two adapters
+implement it: `LocalInbox`, which reads a folder, and `HttpInbox`, which
+reads the organiser's docker server (`GET /emails`, `GET /attachments/{path}`)
+over stdlib `urllib` only — no third-party HTTP client. `scripts/run_pipeline.py
+--server URL` selects it, mutually exclusive with `--data`. A Microsoft Graph
+or IMAP adapter is the same interface, not built.
 
 **Why.** "This could run against a real shared mailbox" is a claim judges hear
-from every team. It is credible only if the seam exists. It exists.
+from every team. It is credible only if the seam exists, and more credible
+once a second adapter has actually been built against it rather than asserted.
+
+**Evidence against a hostile or buggy server.** `HttpInbox` never trusts the
+server's attachment path as a local path: it rejects anything absolute or
+containing a `..` traversal segment before it touches the filesystem, and
+downloads land in a private per-instance temp directory keyed by a flattened,
+validated name. Every request carries a timeout, and an unreachable server
+raises a `ConnectionError` naming the URL, not a bare socket traceback.
 
 ---
 
@@ -246,9 +259,11 @@ failure path converges on escalation to a person.
 | Comparison requested, no attachments | intent plus attachment count | `NEEDS_REVIEW / missing_attachment` |
 | Field present but blank (`???`, `TBA`) | `aliases.is_blank` | `NEEDS_REVIEW / missing_value` |
 | Label we have never seen | alias lookup returns None | field missing, escalate |
-| Model returns an invented value | `verify_against_source` | value discarded, escalate |
+| Model answer rejected by the gate — value not found verbatim in the source document | `core/extract.py:verify_against_source`, counted in `adapters/model.py STATS.gate_rejections` | value discarded, field missing, escalate |
 | Model API down or no key | `ModelUnavailable` | rule tier only, escalate on gaps |
 | New document format | no adapter registered | `kind="OTHER"`, escalate |
+| Email nobody can classify — no rule matched, and the model was unavailable or its own answer failed verification | `core/decide.py`: `intent == "unknown" and confidence == 0.0` | `NEEDS_REVIEW / unclassified` — ours, not the organiser's four reasons; never fires on the sample inbox, exists for unseen mail |
+| PDF label text overflows into the value column and the text extractor interleaves the two runs of glyphs | `core/parsers/pdf.py:_looks_interleaved` | field returned blank rather than a merged wrong value; the comparison row is `undecidable` rather than a false mismatch |
 
 Two invariants enforce this, and both are checkable by reading the code:
 
@@ -324,7 +339,87 @@ that counter actually says after a full 520-email run, not a projection.
 
 ---
 
-## 9. Testing strategy
+## 9. What shipped after the preliminary plan
+
+Everything below was built after PLAN.md was written and is not covered by
+the ADRs above.
+
+**Re-check of an amended draft.** `core/recheck.py` compares the SI against
+two BL drafts — the original and a carrier's amendment — and sorts every one
+of the 7 fields into `fixed`, `still_wrong`, `newly_broken`, `ok`, or
+`unreadable`. `newly_broken` (right in v1, wrong in v2) is the case a tired
+clerk misses, because they only re-read the fields they complained about. No
+model involvement: it is `core/compare.py` run twice. `data/demo/` holds one
+hand-authored amended draft (`email_004_BL_v2.txt`) built to exercise all
+three non-trivial outcomes, since the organiser's own inbox contains only
+first drafts and has nothing to re-check against — see
+`data/demo/README.md`. `core/reply.py:draft_recheck_reply` drafts the
+follow-up the same way the first reply is drafted: template fill over
+already-verified values, never free model text.
+
+**The held-out challenge set.** The organiser corpus (`data/`) is fully
+covered by the rule tier, so on it the model tier is never actually
+consulted — "the model earns its place" is asserted, not shown.
+`data/challenge/` is a small, hand-authored set (30 triage emails, 3 SI/BL
+document pairs) written from general knowledge of shipping-operations email,
+without reading `core/classify.py`, `core/aliases.py`, `core/parsers/`,
+`data/inbox/`, or the ground truth — see `data/challenge/README.md`.
+`scripts/run_challenge.py` runs it twice, rules-only and rules-plus-model,
+and reports the difference. Results on this held-out set:
+
+| Measure | Rules only | Rules + model |
+|---|---|---|
+| Category accuracy | 67% | 100% |
+| Intent accuracy | 50% | 100% |
+| Fields read, unfamiliar labels | 2 of 41 | 41 of 41 |
+
+The model decided 15 of the 30 emails in this run, got 0 of them wrong, and
+made 21 calls in total. After Sheng Kuan's alias work (adding labels the
+challenge set uses but the organiser corpus never does), the rule tier alone
+now reads 18 of the 41 fields without the model. This is the one number in
+the whole project that speaks to generalisation, because it is the one
+dataset nobody tuned against — see "Honest framing" below.
+
+**The off switch.** `CLEARDRAFT_USE_MODEL=0` (`adapters/model.py:available`)
+turns the model tier off without touching the API key, so "how well do the
+rules do alone" is a real, reproducible run rather than a claim — this is
+also how the test suite stays hermetic (`tests/conftest.py` sets it for
+every test).
+
+**Gate rejections are counted, not just gated.** Every model answer that
+fails `verify_against_source` increments `adapters.model.STATS
+.gate_rejections`. It is the same mechanism as the extraction gate described
+in ADR-004, now surfaced as a live number rather than only a code path.
+
+**The live checker.** `POST /api/check` (`api/index.py`) runs the same
+pipeline stages — `extract`, `compare`, `decide`, `draft_reply` — over a pair
+of documents a person uploads through the UI's `#/check` page, rather than
+over the fixed 520-email inbox. See `docs/API.md`.
+
+**"Open draft in mail app."** The reply card's primary action is a `mailto:`
+link built from the drafted subject, recipient and body
+(`web/app.js:replyCard`) — the clerk's own mail client opens with the draft
+already in it. ClearDraft still never sends anything; this replaces "copy
+the text and paste it into a new email" with one click that does the same
+thing.
+
+**`HttpInbox`.** See ADR-007 above.
+
+### Honest framing of the accuracy numbers
+
+On the organiser's 520 emails, the scored end-to-end rate is **1.0000 (46 of
+46 planted defects caught)**. State this plainly and state its limit equally
+plainly: **this is a validation number on the one corpus we hold labels
+for, not evidence of generalisation.** A system can score 1.0 on data whose
+labels informed every rule it contains and still fail on the next inbox it
+sees. The held-out challenge set above is the actual generalisation
+evidence, and it is weaker evidence precisely because it is smaller and
+harder — that is what makes it worth more than a second decimal place on the
+520.
+
+---
+
+## 10. Testing strategy
 
 Three layers, deliberately separated so that a failure tells you where to look.
 
@@ -345,7 +440,7 @@ a measurement instrument, not an input.
 
 ---
 
-## 10. Repository layout
+## 11. Repository layout
 
 ```
 core/            pure domain logic, no I/O
@@ -358,15 +453,23 @@ core/            pure domain logic, no I/O
   compare.py     stage 3b                     Ee Zhan
   decide.py      stage 4                      Ee Zhan
   reply.py       draft generation             Ee Zhan
+  recheck.py     re-check an amended draft    Ee Zhan
   pipeline.py    the orchestrator             Ee Zhan
 adapters/        everything touching the outside world
-api/             FastAPI transport
-web/             Next.js UI
+  inbox.py       LocalInbox, HttpInbox
+  model.py       the one door every model call passes through
+api/             FastAPI transport, Vercel Python serverless function
+web/             static HTML + CSS + one ES module, no build step
 eval/            the scoring harness
 tests/           contract and unit tests
 scripts/         runnable entry points
+  run_pipeline.py     batch run over --data or --server, writes submission.json
+  export_ui_data.py   batch run, writes web/public/data.json for the UI
+  run_challenge.py    the held-out challenge set, rules vs rules+model
 docs/            this file and the rubric map
 data/            the organiser bundle, committable
+  demo/          hand-authored amended draft, for the re-check demo. Not scored.
+  challenge/     the held-out challenge set. Not scored.
 .secrets/        ground-truth labels. Never committable.
 ```
 

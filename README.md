@@ -85,14 +85,19 @@ Process the whole inbox and write a submission file:
 python scripts/run_pipeline.py --data data --out out/submission.json
 ```
 
-Output reports how many calls still hit an unimplemented stage, so progress is
-visible while the pipeline is being built:
+Or against the organiser's docker server instead of a local folder
+(`--data` and `--server` are mutually exclusive):
+
+```bash
+python scripts/run_pipeline.py --server http://localhost:8080 --out out/submission.json
+```
+
+Output confirms every stage ran (during the build it listed any stage still
+stubbed, so progress was visible):
 
 ```
-wrote 520 records to out/submission.json in 0.16s
-stubs still in play:
-   classify     520 calls
-   decide       520 calls
+wrote 520 records to out/submission.json in 2.5s
+no stubs - every stage is implemented
 ```
 
 ## Test it
@@ -121,6 +126,31 @@ decisions made by rule.
 the score is measurable without labels ever entering version control. On a
 clean clone the command prints an explanatory message instead of failing. See
 section 8 of [PLAN.md](PLAN.md).
+
+On the organiser's 520 emails the end-to-end score is **1.0000 (46 of 46
+planted defects caught)**. That is a validation number on the one corpus we
+hold labels for, not evidence of generalisation — see the held-out result
+below for that.
+
+---
+
+## Beyond the batch run
+
+- **Live checker** — `POST /api/check` and the UI's `#/check` page let you
+  upload one SI and one BL directly and see the same 7-row verdict, without
+  running the whole inbox. See [docs/API.md](docs/API.md).
+- **Re-check** — `core/recheck.py` compares an amended draft BL against the
+  same SI and reports what got fixed, what is still wrong, and what the
+  amendment broke. Demonstrated with a hand-authored amended draft in
+  `data/demo/`, since the organiser's inbox holds only first drafts.
+- **Held-out challenge set** — `data/challenge/` is a small set written
+  without reference to our rules, to measure how the model fallback
+  generalises rather than how well it fits the sample inbox. Run with
+  `python scripts/run_challenge.py`. On it: category accuracy 67% -> 100%
+  and intent accuracy 50% -> 100% with the model as fallback; fields read
+  under unfamiliar labels went from 2 of 41 to 41 of 41 (18 of 41 with rules
+  alone after later alias work); the model decided 15 emails and got none
+  wrong, across 21 calls.
 
 ---
 
@@ -151,6 +181,8 @@ dataset.
 | Document | What it covers |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, seven ADRs with trade-offs, failure modes, scaling limits |
+| [docs/API.md](docs/API.md) | The API contract: what is built (`/api/health`, `/api/check`) and what is still planned |
+| [docs/PROJECT_DESCRIPTION.md](docs/PROJECT_DESCRIPTION.md) | The hackathon submission summary: name, problem, approach, results |
 | [PLAN.md](PLAN.md) | What we learned from the dataset, the build plan, team split |
 | [docs/RUBRIC_MAP.md](docs/RUBRIC_MAP.md) | One distinct piece of evidence per judging criterion |
 | [tasks/todo.md](tasks/todo.md) | Live task board |

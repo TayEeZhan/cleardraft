@@ -2,7 +2,13 @@
 
 **Team:** Ee Zhan (Claude Code) · Sheng Kuan (Claude Code) · Zi Qi (Codex)
 **Deadline:** Tue 22 Sep 2026
-**Stack:** Python FastAPI (core) + Next.js on Vercel (UI)
+**Stack:** Python FastAPI (core) + static HTML/CSS/JS on Vercel (UI)
+
+**Note, added after the preliminary round:** what actually shipped differs
+from a few specifics in this plan, most visibly the UI framework (below) and
+the API host (Vercel Python serverless, not Render — see §7). This document
+is kept as the historical build plan; `docs/ARCHITECTURE.md` and
+`docs/API.md` describe the system as built.
 
 ---
 
@@ -188,7 +194,7 @@ place, and a verification gate on every AI output.**
                                 |
         +-----------------------v--------------------------+
         |  Reply drafter (template fill, never free text)  |
-        |  Next.js UI on Vercel                            |
+        |  Static HTML/CSS/JS UI on Vercel                 |
         |  submission.json exporter                        |
         +--------------------------------------------------+
 ```
@@ -233,8 +239,8 @@ with no collisions.
 - Normaliser and comparator — this is the 50% path, it stays with one owner
 - Escalation gates
 - FastAPI service
-- Next.js UI (Hick's Law, §4)
-- Vercel + Render deployment
+- Static HTML/CSS/JS UI, no build step (Hick's Law, §4)
+- Vercel deployment: static site plus Python serverless API, one project
 - `submission.json` exporter
 - Agent review gate (§6)
 - Slide deck and 5-minute video
@@ -378,7 +384,7 @@ cheaper models. The in-product model is Haiku 4.5.
 | `frontend-design` | UI direction, so it does not look templated |
 | `dataviz` | The accuracy page charts |
 | `ecc:frontend-a11y` | Contrast and keyboard access |
-| `ecc:deployment-patterns`, `ecc:docker-patterns` | Vercel, Render, and our own `docker-compose.yml` |
+| `ecc:deployment-patterns` | Vercel: static site plus Python serverless API, one project |
 | `anthropic-skills:pptx` | Slide deck |
 | `hyperframes` or `product-launch-video` | The 5-minute demo video |
 
@@ -391,11 +397,9 @@ lower. Ours:
 
 | Layer | Service | Tier |
 |---|---|---|
-| UI | Next.js on **Vercel** | Free |
-| API | FastAPI on **Render** | Free |
+| UI + API | Static HTML/CSS/JS and FastAPI, one **Vercel** project (Python serverless function for the API) | Free |
 | Model | **Anthropic API**, Haiku 4.5 | Pay per call, tiny |
 | Layout cache (final round) | **Upstash Redis** | Free |
-| Reproducibility | Our own `docker-compose.yml` | — |
 
 We ship the dataset inside the deployment so judges can run the live prototype
 without our machine. The organiser confirmed this is acceptable and that the
