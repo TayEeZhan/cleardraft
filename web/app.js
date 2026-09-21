@@ -17,6 +17,15 @@ let MINE = { board: [], detail: {} };
 let SRC = "mine"; // "mine" | "sample" — which source the inbox view shows
 let UPLOADING = false;
 
+/* Accounts are optional: the site works exactly as it always has when they
+   are unavailable or the visitor is signed out. `available` is null until
+   GET /api/auth/me answers; once it is false, the account control stays
+   hidden for the rest of the session. */
+let ACCOUNT = { available: null, user: null };
+let ACCOUNT_MODE = "signup"; // "signup" | "signin" — #/account form mode
+let ADDMAIL_TAB = "drop";    // "drop" | "paste" — which add-mail tab shows
+let ADDMAIL_OPEN = false;    // populated "Your mail": is the add-mail panel open
+
 function pct(x) { return `${Math.round(x * 100)}%`; }
 
 function loadMine() {
@@ -59,22 +68,12 @@ async function load() {
     const r = await fetch("/api/emails", { signal: AbortSignal.timeout(2500) });
     if (r.ok) {
       const live = await r.json();
-      if (live && live.emails) { setSource(true, "live api"); return live; }
+      if (live && live.emails) return live;
     }
   } catch { /* fall through to the snapshot */ }
   const r = await fetch("public/data.json");
   if (!r.ok) throw new Error("could not load results");
-  setSource(false, "snapshot");
   return r.json();
-}
-
-function setSource(live, label) {
-  const chip = $("#source-chip");
-  chip.dataset.live = String(live);
-  $("#source-text").textContent = label;
-  chip.title = live
-    ? "Reading from the live API"
-    : "Reading the exported snapshot of a full 520-email run";
 }
 
 function tabOf(row) {
@@ -809,9 +808,28 @@ function renderBoardView() {
   }
 
   const showEmpty = SRC === "mine" && mineCount === 0;
-  $("#mine-empty").hidden = !showEmpty;
   $("#board-normal").hidden = showEmpty;
   $("#mine-actions").hidden = SRC !== "mine";
+  $("#mine-sample-actions").hidden = !(SRC === "mine" && showEmpty);
+
+  const showAddMail = SRC === "mine" && (showEmpty || ADDMAIL_OPEN);
+  $("#addmail-panel").hidden = !showAddMail;
+  const addBtn = $("#add-emails-btn");
+  if (addBtn) addBtn.setAttribute("aria-expanded", String(ADDMAIL_OPEN));
+
+  const privacy = $("#mine-privacy-line");
+  privacy.hidden = SRC !== "mine";
+  if (SRC === "mine") {
+    privacy.replaceChildren();
+    if (ACCOUNT.user) {
+      privacy.append(document.createTextNode("Saved in your account. Only you can see it."));
+    } else {
+      privacy.append(document.createTextNode("Saved in this browser only. "));
+      const link = el("a", "link-btn", "Create an account to keep it on any device.");
+      link.href = "#/account";
+      privacy.append(link);
+    }
+  }
 
   if (!showEmpty) {
     updateTabCounts();
@@ -823,6 +841,8 @@ function switchSource(s) {
   if (SRC === s) return;
   setSourceKey(s);
   clearUploadPanels();
+  ADDMAIL_OPEN = false;
+  setAddMailTab("drop");
   renderBoardView();
 }
 
@@ -885,12 +905,21 @@ function mergeMineResult(data) {
   MINE.detail[board.email_id] = detail;
 }
 
-async function uploadOne(file) {
-  const fd = new FormData();
-  fd.append("eml", file);
+/* Signed-in mail lives on the server (already saved by the time the
+   response comes back); only a signed-out visitor's mail belongs in
+   localStorage. Every place that used to call saveMine() unconditionally
+   now goes through this so account mail is never written to the browser. */
+function persistMineIfLocal() {
+  if (!ACCOUNT.user) saveMine();
+}
+
+/* Shared by both ways of adding an email — a dropped .eml and a pasted
+   email — so the two never drift apart. Throws { missingApi: true } when
+   there is no live backend to talk to, or { detail } for a rejected file. */
+async function submitProcessEmail(fd) {
   let r;
   try {
-    r = await fetch("/api/process-email", { method: "POST", body: fd });
+    r = await fetch("/api/process-email", { method: "POST", body: fd, credentials: "same-origin" });
   } catch {
     throw { missingApi: true };
   }
@@ -907,6 +936,12 @@ async function uploadOne(file) {
     throw { detail: j.detail || j.error || `HTTP ${r.status}` };
   }
   return r.json();
+}
+
+async function uploadOne(file) {
+  const fd = new FormData();
+  fd.append("eml", file);
+  return submitProcessEmail(fd);
 }
 
 async function uploadFiles(fileList) {
@@ -935,7 +970,7 @@ async function uploadFiles(fileList) {
     try {
       const data = await uploadOne(file);
       mergeMineResult(data);
-      saveMine();
+      persistMineIfLocal();
       successCount++;
       if (data.board && data.board.status === "MISMATCH") mismatchCount++;
       renderBoardView();
@@ -1008,15 +1043,27 @@ function initMineControls() {
     input.value = "";
   });
 
-  $("#add-emails-btn").addEventListener("click", () => input.click());
+  $("#add-emails-btn").addEventListener("click", () => {
+    ADDMAIL_OPEN = !ADDMAIL_OPEN;
+    renderBoardView();
+  });
   $("#try-samples-btn").addEventListener("click", trySampleEmails);
   $("#show-sample-inbox-btn").addEventListener("click", () => switchSource("sample"));
 
-  $("#clear-mine-btn").addEventListener("click", () => {
+  $("#clear-mine-btn").addEventListener("click", async () => {
     if (UPLOADING) return;
     if (!confirm("Clear all of your uploaded mail? This cannot be undone.")) return;
+    if (ACCOUNT.user) {
+      try {
+        const r = await fetch("/api/mail", { method: "DELETE", credentials: "same-origin" });
+        if (!r.ok && r.status !== 401) { toast("Could not clear your mail. Try again."); return; }
+      } catch {
+        toast("Could not reach the server. Try again.");
+        return;
+      }
+    }
     MINE = { board: [], detail: {} };
-    saveMine();
+    persistMineIfLocal();
     clearUploadPanels();
     renderBoardView();
     toast("Your mail cleared.");
@@ -1049,9 +1096,313 @@ function initMineControls() {
   });
 }
 
+/* ── Add mail: "Drop .eml files" / "Paste an email" tabs ────────── */
+function setAddMailTab(tab) {
+  ADDMAIL_TAB = tab;
+  $("#addmail-tab-drop").setAttribute("aria-selected", String(tab === "drop"));
+  $("#addmail-tab-paste").setAttribute("aria-selected", String(tab === "paste"));
+  $("#addmail-drop").hidden = tab !== "drop";
+  $("#addmail-paste").hidden = tab !== "paste";
+}
+
+function initAddMailTabs() {
+  $("#addmail-tab-drop").addEventListener("click", () => setAddMailTab("drop"));
+  $("#addmail-tab-paste").addEventListener("click", () => setAddMailTab("paste"));
+}
+
+function resetPasteForm() {
+  const form = $("#paste-form");
+  if (form) form.reset();
+}
+
+/* Runs the pasted email through the exact same pipeline as a dropped .eml —
+   submitProcessEmail(), mergeMineResult(), the same progress/error panels —
+   so the two intake paths can never show different results for the same
+   email. */
+async function submitPaste(e) {
+  e.preventDefault();
+  if (UPLOADING) return;
+
+  const subject = $("#paste-subject").value.trim();
+  const body = $("#paste-body").value.trim();
+  const sender = $("#paste-from").value.trim();
+  const filesInput = $("#paste-files");
+  const files = Array.from((filesInput && filesInput.files) || []);
+
+  if (!body) { toast("Email text is required."); return; }
+  if (files.length > 4) { toast("Attach up to 4 files."); return; }
+
+  clearUploadPanels();
+  setUploadingUI(true);
+  const btn = $("#paste-submit");
+  if (btn) { btn.disabled = true; btn.textContent = "Checking…"; }
+  const progress = $("#upload-progress");
+  progress.hidden = false;
+  progress.textContent = "Reading the email…";
+
+  const fd = new FormData();
+  if (subject) fd.append("subject", subject);
+  fd.append("body", body);
+  if (sender) fd.append("sender", sender);
+  for (const f of files) fd.append("files", f);
+
+  try {
+    const data = await submitProcessEmail(fd);
+    mergeMineResult(data);
+    persistMineIfLocal();
+    resetPasteForm();
+    renderBoardView();
+    toast(`Email read${data.board && data.board.status === "MISMATCH" ? " · discrepancy found" : ""}`);
+  } catch (err) {
+    if (err && err.missingApi) {
+      showUploadApiMissing();
+    } else {
+      showUploadErrors([{ name: subject || "Pasted email", detail: (err && err.detail) || "could not be processed" }]);
+    }
+  } finally {
+    progress.hidden = true;
+    setUploadingUI(false);
+    if (btn) { btn.disabled = false; btn.textContent = "Check this email"; }
+  }
+}
+
+function initPasteForm() {
+  const form = $("#paste-form");
+  if (form) form.addEventListener("submit", submitPaste);
+}
+
+/* ── Accounts ───────────────────────────────────────────────────
+   Entirely optional: GET /api/auth/me tells us on boot whether accounts
+   exist at all. Any failure (503, 404, a network error) is treated the
+   same way — accounts are unavailable, the account control stays hidden,
+   and the rest of the site behaves exactly as it does without them. */
+async function fetchMe() {
+  try {
+    const r = await fetch("/api/auth/me", { credentials: "same-origin", signal: AbortSignal.timeout(2500) });
+    if (r.status === 401) { ACCOUNT.available = true; ACCOUNT.user = null; return; }
+    if (!r.ok) { ACCOUNT.available = false; ACCOUNT.user = null; return; }
+    const j = await r.json();
+    ACCOUNT.available = true;
+    ACCOUNT.user = j.user || null;
+  } catch {
+    ACCOUNT.available = false;
+    ACCOUNT.user = null;
+  }
+}
+
+function renderAccountChip() {
+  const chip = $("#account-chip");
+  if (!chip) return;
+  if (!ACCOUNT.available) { chip.hidden = true; return; }
+  chip.hidden = false;
+  const signinBtn = $("#account-signin-btn");
+  const wrap = $("#account-user-wrap");
+  if (ACCOUNT.user) {
+    signinBtn.hidden = true;
+    wrap.hidden = false;
+    $("#account-email-text").textContent = ACCOUNT.user.email;
+    $("#account-email-btn").title = ACCOUNT.user.email;
+  } else {
+    signinBtn.hidden = false;
+    wrap.hidden = true;
+    closeAccountMenu();
+  }
+}
+
+function closeAccountMenu() {
+  const menu = $("#account-menu");
+  const btn = $("#account-email-btn");
+  if (menu) menu.hidden = true;
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+
+/* A visitor's local mail (added before they had an account, or on a
+   browser they were signed out on) is folded into the account the first
+   time they sign in or sign up, then the local copy is cleared — it now
+   lives on the server, the single source of truth from here on. */
+async function importLocalMailIfAny() {
+  const local = loadMine();
+  if (!local.board.length) return;
+  try {
+    const r = await fetch("/api/mail/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ board: local.board, detail: local.detail }),
+    });
+    if (!r.ok) return;
+    const j = await r.json().catch(() => ({}));
+    try { localStorage.removeItem("cleardraft.mine.v1"); } catch { /* best effort */ }
+    const n = typeof j.count === "number" ? j.count : local.board.length;
+    toast(`Moved ${n} email${n === 1 ? "" : "s"} into your account`);
+  } catch { /* offline — the local copy stays put as a fallback */ }
+}
+
+async function loadAccountMail() {
+  try {
+    const r = await fetch("/api/mail", { credentials: "same-origin", signal: AbortSignal.timeout(4000) });
+    if (r.status === 401) { ACCOUNT.user = null; return; }
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && Array.isArray(j.board) && j.detail) MINE = { board: j.board, detail: j.detail };
+  } catch { /* network hiccup — keep whatever Your mail already shows */ }
+}
+
+async function afterSignedIn() {
+  await importLocalMailIfAny();
+  await loadAccountMail();
+  renderAccountChip();
+  if (location.hash.startsWith("#/board")) renderBoardView();
+}
+
+async function signOut() {
+  try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch { /* proceed regardless */ }
+  ACCOUNT.user = null;
+  MINE = loadMine();
+  renderAccountChip();
+  location.hash = "#/";
+  route();
+  toast("Signed out.");
+}
+
+function initAccountControl() {
+  const signinBtn = $("#account-signin-btn");
+  if (signinBtn) signinBtn.addEventListener("click", () => { location.hash = "#/account"; });
+
+  const emailBtn = $("#account-email-btn");
+  if (emailBtn) {
+    emailBtn.addEventListener("click", () => {
+      const menu = $("#account-menu");
+      const willShow = menu.hidden;
+      menu.hidden = !willShow;
+      emailBtn.setAttribute("aria-expanded", String(willShow));
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    const wrap = $("#account-user-wrap");
+    if (wrap && !wrap.hidden && !wrap.contains(e.target)) closeAccountMenu();
+  });
+
+  const signoutBtn = $("#account-signout-btn");
+  if (signoutBtn) signoutBtn.addEventListener("click", () => { closeAccountMenu(); signOut(); });
+}
+
+/* ── #/account: create-account / sign-in form ──────────────────── */
+const AUTH_ERROR_TEXT = {
+  invalid_email: "That email address doesn't look right.",
+  weak_password: "Choose a longer password (at least 8 characters).",
+  email_taken: "An account with that email already exists.",
+  bad_credentials: "Wrong email or password.",
+  too_many_attempts: "Too many attempts. Wait a bit and try again.",
+  accounts_unavailable: "Accounts aren't available right now.",
+};
+
+function authErrorMessage(j) {
+  if (j && j.detail) return j.detail;
+  if (j && j.error && AUTH_ERROR_TEXT[j.error]) return AUTH_ERROR_TEXT[j.error];
+  return "Something went wrong. Try again.";
+}
+
+function setAccountMode(mode) {
+  ACCOUNT_MODE = mode;
+  renderAccountView();
+}
+
+function renderAccountView() {
+  const title = $("#account-title");
+  const submit = $("#account-submit");
+  const switchBtn = $("#account-switch-btn");
+  const pwInput = $("#account-password-input");
+  const errHost = $("#account-error");
+  if (!title) return;
+  errHost.hidden = true;
+  errHost.textContent = "";
+  if (ACCOUNT_MODE === "signup") {
+    title.textContent = "Create your account";
+    submit.textContent = "Create account";
+    switchBtn.textContent = "Already have an account? Sign in";
+    pwInput.autocomplete = "new-password";
+  } else {
+    title.textContent = "Sign in";
+    submit.textContent = "Sign in";
+    switchBtn.textContent = "New here? Create an account";
+    pwInput.autocomplete = "current-password";
+  }
+}
+
+async function submitAccountForm(e) {
+  e.preventDefault();
+  const email = $("#account-email-input").value.trim();
+  const password = $("#account-password-input").value;
+  const errHost = $("#account-error");
+  errHost.hidden = true;
+  errHost.textContent = "";
+
+  const btn = $("#account-submit");
+  btn.disabled = true;
+  const prevText = btn.textContent;
+  btn.textContent = ACCOUNT_MODE === "signup" ? "Creating…" : "Signing in…";
+
+  const path = ACCOUNT_MODE === "signup" ? "/api/auth/signup" : "/api/auth/login";
+  try {
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ email, password }),
+    });
+    let j = {};
+    try { j = await r.json(); } catch { /* no body */ }
+
+    if (r.status === 503) {
+      ACCOUNT.available = false;
+      renderAccountChip();
+      errHost.hidden = false;
+      errHost.textContent = authErrorMessage(j);
+      return;
+    }
+    if (!r.ok) {
+      errHost.hidden = false;
+      errHost.textContent = authErrorMessage(j);
+      return;
+    }
+
+    ACCOUNT.available = true;
+    ACCOUNT.user = j.user;
+    renderAccountChip();
+    await afterSignedIn();
+    setSourceKey("mine");
+    location.hash = "#/board";
+    route();
+    toast(ACCOUNT_MODE === "signup" ? "Account created." : "Signed in.");
+  } catch {
+    errHost.hidden = false;
+    errHost.textContent = "Could not reach the server. Check your connection and try again.";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevText;
+  }
+}
+
+function initAccountForm() {
+  const form = $("#account-form");
+  if (!form) return;
+  form.addEventListener("submit", submitAccountForm);
+  $("#account-switch-btn").addEventListener("click", () => setAccountMode(ACCOUNT_MODE === "signup" ? "signin" : "signup"));
+  const toggle = $("#account-password-toggle");
+  toggle.addEventListener("click", () => {
+    const input = $("#account-password-input");
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    toggle.textContent = show ? "Hide" : "Show";
+    toggle.setAttribute("aria-pressed", String(show));
+  });
+}
+
 function route() {
   const h = location.hash;
-  const views = { home: $("#view-home"), board: $("#view-board"), review: $("#view-review"), accuracy: $("#view-accuracy"), check: $("#view-check") };
+  const views = { home: $("#view-home"), board: $("#view-board"), review: $("#view-review"), accuracy: $("#view-accuracy"), check: $("#view-check"), account: $("#view-account") };
   for (const v of Object.values(views)) v.hidden = true;
 
   let active = "home";
@@ -1066,6 +1417,10 @@ function route() {
   } else if (h.startsWith("#/check")) {
     active = "check";
     views.check.hidden = false;
+  } else if (h.startsWith("#/account")) {
+    active = "account";
+    views.account.hidden = false;
+    setAccountMode("signup");
   } else if (h.startsWith("#/board")) {
     active = "board";
     views.board.hidden = false;
@@ -1100,7 +1455,7 @@ function toast(msg) {
   SRC = getSourceKey();
 
   try {
-    DATA = await load();
+    [DATA] = await Promise.all([load(), fetchMe()]);
   } catch {
     $("#case-list").append(el("div", "empty", "Could not load results. Run: python scripts/export_ui_data.py"));
     return;
@@ -1113,9 +1468,16 @@ function toast(msg) {
   initSearch();
   initSourceSwitch();
   initMineControls();
+  initAddMailTabs();
+  initPasteForm();
+  initAccountControl();
+  initAccountForm();
 
   const mineCard = $("#home-card-mine");
   if (mineCard) mineCard.addEventListener("click", () => setSourceKey("mine"));
+
+  renderAccountChip();
+  if (ACCOUNT.available && ACCOUNT.user) await afterSignedIn();
 
   addEventListener("hashchange", route);
   route();

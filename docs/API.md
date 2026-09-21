@@ -49,13 +49,21 @@ something, it belongs in `core/decide.py`, not in the API.
 
 ## Built vs planned
 
-Two endpoints are implemented and deployed:
+These endpoints are implemented and deployed:
 
 | Endpoint | Status |
 |---|---|
-| `GET /api/health` | Built |
+| `GET /api/health` | Built — now also reports `accounts` (bool: is storage configured) |
 | `POST /api/check` | Built — this is the live checker behind the UI's `#/check` page |
-| `POST /api/process-email` | Built — one `.eml` file (field `eml`, 4 MB max) runs through the whole pipeline; returns `{board, detail, model, seconds}` in the same shapes as `web/public/data.json`. Behind the inbox's "Your mail" upload |
+| `POST /api/process-email` | Built — accepts either an uploaded `.eml` file (field `eml`, 4 MB max) or a **pasted email** (`subject`/`body`/`sender` form fields + up to 4 `files`), runs it through the whole pipeline, and returns `{board, detail, model, seconds, saved}` in the same shapes as `web/public/data.json`. Behind the inbox's "Your mail" upload |
+| `POST /api/auth/signup` | Built — see "Accounts" below |
+| `POST /api/auth/login` | Built |
+| `POST /api/auth/logout` | Built |
+| `GET /api/auth/me` | Built |
+| `GET /api/mail` | Built — the signed-in user's saved mailbox |
+| `POST /api/mail/import` | Built — merge locally-saved results into the account |
+| `DELETE /api/mail` | Built — clear the saved mailbox |
+| `DELETE /api/mail/{email_id}` | Built — remove one saved email |
 
 Everything else originally sketched for this contract is **planned, not
 built**: `GET /api/emails`, `GET /api/emails/{email_id}`, `GET /api/stats`,
@@ -173,6 +181,119 @@ Notes:
   never sees the uploaded `subject`/`body` for extraction, only for the
   optional `email_reading` classification.
 - `email_reading` is `null` unless `subject` or `body` was actually supplied.
+
+---
+
+### `POST /api/process-email`
+
+Two request shapes, same pipeline underneath:
+
+1. **Upload a `.eml` file** — `multipart/form-data` field `eml`, ≤ 4 MB.
+2. **Paste an email** — no `eml` field; instead `subject` (optional),
+   `body` (required, ≤ 50,000 characters), `sender` (optional — defaults to
+   `unknown@pasted.local`), and 0–4 `files` (`.txt`/`.pdf`/`.xlsx`/`.docx`,
+   4 MB total). The server builds an `email.message.EmailMessage` out of
+   these fields, serialises it to bytes, and runs it through **the exact
+   same** parse → classify → extract → compare → decide → draft_reply chain
+   as an uploaded `.eml` (`api.index._process_eml_bytes` — one pipeline, no
+   duplicated logic). `email_id` is `"up_" + sha1(bytes)[:12]` either way;
+   in paste mode `detail.filename` is always `"Pasted email"`.
+
+**400 responses**, shape `{"error": "...", "detail": "..."}`:
+
+| `error` | When |
+|---|---|
+| `missing_email` | Neither an `eml` file nor a non-blank `body` was given |
+| `unsupported_extension` | `.eml` extension isn't `.eml`, or a pasted `files` entry isn't `.txt`/`.pdf`/`.xlsx`/`.docx` |
+| `file_too_large` | `.eml` exceeds 4 MB, or pasted `files` exceed 4 MB combined |
+| `body_too_long` | pasted `body` exceeds 50,000 characters |
+| `too_many_files` | more than 4 `files` attached in paste mode |
+| `not_an_email` | the bytes (uploaded or built from the paste) don't parse as an email |
+
+**200 response** adds two accounts-aware fields on top of `{board, detail,
+model, seconds}`:
+
+- `saved` (bool) — `true` when the caller was signed in (a valid
+  `cd_session` cookie) and the result was written into their mailbox;
+  `false` when signed out.
+- `save_error` — present only when `saved` is `false` **and** the caller
+  was signed in but the save itself raised. This should be rare: the
+  mailbox cap (see "Accounts" below) always makes room by dropping the
+  oldest entry, so it never fails for being "full" in the literal sense —
+  its value is `save_failed`: whatever storage-level failure
+  prevented the save, so the check result is still returned instead of a
+  500.
+
+---
+
+## Accounts
+
+Sign-up/login plus a small per-user saved mailbox, so a visitor can create
+an account, paste or upload emails through the checker, and see them again
+on return — **without ever connecting a real mailbox**. No Gmail/OAuth
+integration exists or is planned here; "put your Gmail stuff into the
+website" means paste the email's text (or upload a `.eml`/attachments you
+already saved), never hand over real Gmail credentials.
+
+**Storage** — `adapters/store.py`, chosen once per process and cached:
+
+1. **Upstash Redis REST API**, when `KV_REST_API_URL` + `KV_REST_API_TOKEN`
+   are set (what the Vercel Upstash integration injects), falling back to
+   `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`. Implemented over
+   `urllib` only — no new pip dependency.
+2. **In-memory dict** (`adapters.store.MemoryStore`), when
+   `CLEARDRAFT_STORE=memory`. Tests and local dev only; not shared across
+   processes and lost on restart.
+3. **Unconfigured** — every accounts route answers `503
+   {"error": "accounts_unavailable", ...}` rather than silently pretending
+   to work.
+
+`GET /api/health`'s `accounts` field reports whether a store resolved.
+
+**Password hashing** — `hashlib.scrypt(password, salt=<16 random bytes>,
+n=2**14, r=8, p=1, dklen=32)`, salt and hash stored as hex, compared with
+`hmac.compare_digest`. A login attempt for an unknown email still runs one
+scrypt call (against a fixed dummy salt) so response timing doesn't reveal
+which addresses have accounts. Passwords are never logged and never appear
+in an API response.
+
+**Sessions** — a random `secrets.token_urlsafe(32)` token lives in cookie
+`cd_session` (`HttpOnly`, `SameSite=Lax`, `Path=/`, `Max-Age` 30 days,
+`Secure` when the request is HTTPS — checked via `request.url.scheme` or
+`X-Forwarded-Proto`). The server stores only `sha256(token)` as the key
+(`session:<sha256hex> -> email`, 30-day expiry), so a store dump never
+yields a usable token.
+
+**Storage keys**:
+
+| Key | Value |
+|---|---|
+| `user:<email>` | `{"email", "created" (ISO date), "salt", "hash"}` |
+| `session:<sha256(token)>` | the signed-in email, as a plain string |
+| `mail:<email>` | `{"board": [...], "detail": {...}}` — same shapes as `web/public/data.json` |
+| `loginfail:<email>` | failed-login counter, 15-minute expiry |
+
+**Limits**:
+
+- Email: lowercased/stripped, must contain exactly one `@`, a non-empty
+  local part and domain, a `.` in the domain, ≤ 254 characters total.
+- Password: 8–128 characters.
+- Login lockout: 10 failed attempts per email inside 15 minutes ->
+  `429 {"error": "too_many_attempts", ...}` on the next attempt (the 11th),
+  via `store.incr` with a 15-minute expiry.
+- Mailbox: capped at 200 emails. `POST /api/mail/import` and a signed-in
+  `POST /api/process-email` both merge into the existing mailbox, dedupe by
+  `email_id` (the newer copy wins), and drop the oldest entries once over
+  the cap.
+- `POST /api/mail/import` rejects a request body over 2 MB outright
+  (`413 {"error": "too_large", ...}`) and silently drops any `board` row
+  that isn't a dict with a string `email_id` starting `"up_"` (and any
+  `detail` entry not keyed by a surviving id) rather than failing the whole
+  import over one bad row.
+
+**Env vars**: `KV_REST_API_URL`, `KV_REST_API_TOKEN` (or
+`UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`) for production;
+`CLEARDRAFT_STORE=memory` for tests/local dev without Redis.
 
 ---
 

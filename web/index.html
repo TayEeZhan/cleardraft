@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClearDraft — shipping document verification</title>
-<meta name="description" content="Checks a draft Bill of Lading against its Shipping Instruction, shows the line it read every value from, and asks for a human when it cannot decide.">
+<title>ClearDraft — shipping paperwork, checked in seconds</title>
+<meta name="description" content="ClearDraft sorts your shipping inbox, checks every draft Bill of Lading against its Shipping Instruction, and drafts the reply — or hands it to a person when it isn't sure.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -27,8 +27,16 @@
     <a href="#/check" data-route="check" class="nav-link">Check a pair</a>
     <a href="#/accuracy" data-route="accuracy" class="nav-link">Accuracy</a>
   </nav>
-  <div class="source" id="source-chip" title="Where this page is reading its results from">
-    <span class="dot" aria-hidden="true"></span><span id="source-text">loading</span>
+  <div class="account" id="account-chip" hidden>
+    <button type="button" class="account-btn" id="account-signin-btn">Sign in</button>
+    <div class="account-user-wrap" id="account-user-wrap" hidden>
+      <button type="button" class="account-btn account-email-btn" id="account-email-btn" aria-haspopup="true" aria-expanded="false">
+        <span id="account-email-text"></span>
+      </button>
+      <div class="account-menu" id="account-menu" hidden role="menu">
+        <button type="button" class="account-menu-item" id="account-signout-btn" role="menuitem">Sign out</button>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -42,8 +50,8 @@
 
   <section id="view-home" class="view">
     <div class="home-hero">
-      <h1>Catch Bill of Lading errors before they ship.</h1>
-      <p class="lede">ClearDraft compares the draft Bill of Lading with the Shipping Instruction on 7 fields, shows the line it read each value from, and asks a person when it isn't sure.</p>
+      <h1>Shipping paperwork, checked in seconds.</h1>
+      <p class="lede">ClearDraft sorts your shipping inbox, checks every draft Bill of Lading against its Shipping Instruction, and drafts the reply — or hands it to a person when it isn't sure.</p>
       <a href="#/case/email_004" class="btn btn-primary btn-large">See a real check</a>
       <p class="hero-caption">A draft with two wrong fields, the source lines, and the reply it drafted.</p>
     </div>
@@ -79,19 +87,52 @@
     <div id="upload-progress" class="upload-progress" aria-live="polite" hidden></div>
     <div id="upload-errors" class="upload-errors" aria-live="polite" hidden></div>
 
-    <div id="mine-empty" class="mine-empty" hidden>
-      <div class="drop-zone drop-zone-large" id="mail-drop-zone">
-        <label for="mail-file-input" class="drop-label">
-          <span class="drop-title">Drop .eml files here</span>
-          <span class="drop-hint">or choose files</span>
-        </label>
+    <div class="addmail" id="addmail-panel" hidden>
+      <div class="addmail-tabs" role="tablist" aria-label="Add an email">
+        <button type="button" class="switch-btn" id="addmail-tab-drop" role="tab" aria-selected="true">Drop .eml files</button>
+        <button type="button" class="switch-btn" id="addmail-tab-paste" role="tab" aria-selected="false">Paste an email</button>
       </div>
-      <p class="mine-howto">Gmail: open the email → ⋮ → Download message. Outlook: drag the email to the desktop.</p>
-      <p class="mine-privacy">Emails are read on our server and not kept there. Results are saved only in this browser.</p>
-      <div class="mine-empty-actions">
-        <button type="button" class="link-btn" id="try-samples-btn">Try 6 sample emails</button>
-        <button type="button" class="link-btn" id="show-sample-inbox-btn">Show the sample company inbox</button>
+
+      <div class="addmail-section" id="addmail-drop">
+        <div class="drop-zone drop-zone-large" id="mail-drop-zone">
+          <label for="mail-file-input" class="drop-label">
+            <span class="drop-title">Drop .eml files here</span>
+            <span class="drop-hint">or choose files</span>
+          </label>
+        </div>
+        <p class="mine-howto">Gmail: open the email → ⋮ → Download message. Outlook: drag the email to the desktop.</p>
       </div>
+
+      <div class="addmail-section" id="addmail-paste" hidden>
+        <form id="paste-form" class="paste-form" novalidate>
+          <label class="field">
+            <span class="field-label">Subject (optional)</span>
+            <input type="text" id="paste-subject" class="field-input" autocomplete="off">
+          </label>
+          <label class="field">
+            <span class="field-label">Email text</span>
+            <textarea id="paste-body" class="field-input" rows="8" spellcheck="true" required></textarea>
+          </label>
+          <label class="field">
+            <span class="field-label">From (optional)</span>
+            <input type="text" id="paste-from" class="field-input" autocomplete="off">
+          </label>
+          <label class="field">
+            <span class="field-label">Attach the SI and BL (optional)</span>
+            <input type="file" id="paste-files" class="field-input paste-files-input" multiple accept=".txt,.pdf,.xlsx,.docx">
+          </label>
+          <div class="check-actions">
+            <button type="submit" class="btn btn-primary" id="paste-submit">Check this email</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <p class="mine-privacy" id="mine-privacy-line" hidden></p>
+
+    <div class="mine-empty-actions" id="mine-sample-actions" hidden>
+      <button type="button" class="link-btn" id="try-samples-btn">Try 6 sample emails</button>
+      <button type="button" class="link-btn" id="show-sample-inbox-btn">Show the sample company inbox</button>
     </div>
 
     <div id="board-normal" hidden>
@@ -186,6 +227,35 @@
     </form>
 
     <div id="check-result" class="check-result" aria-live="polite"></div>
+  </section>
+
+  <section id="view-account" class="view" hidden>
+    <div class="view-head">
+      <h1 id="account-title">Create your account</h1>
+      <p class="account-reassure">No Gmail connection needed — you add emails yourself, and only you can see them.</p>
+    </div>
+
+    <form id="account-form" class="account-form" novalidate>
+      <label class="field">
+        <span class="field-label">Email</span>
+        <input type="email" id="account-email-input" class="field-input" autocomplete="email" required>
+      </label>
+      <label class="field">
+        <span class="field-label">Password</span>
+        <div class="password-wrap">
+          <input type="password" id="account-password-input" class="field-input" autocomplete="new-password" minlength="8" required>
+          <button type="button" class="link-btn password-toggle" id="account-password-toggle" aria-pressed="false">Show</button>
+        </div>
+      </label>
+
+      <div class="account-error" id="account-error" aria-live="polite" hidden></div>
+
+      <div class="check-actions">
+        <button type="submit" class="btn btn-primary" id="account-submit">Create account</button>
+      </div>
+
+      <p class="account-switch"><button type="button" class="link-btn" id="account-switch-btn">Already have an account? Sign in</button></p>
+    </form>
   </section>
 
   <section id="view-accuracy" class="view" hidden>

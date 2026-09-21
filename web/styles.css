@@ -79,13 +79,48 @@ a { color: inherit; }
 .nav-link:hover { background: var(--surface-2); color: var(--ink); }
 .nav-link[aria-current="page"] { background: var(--ink); color: #fff; }
 
-.source {
-  display: flex; align-items: center; gap: 7px;
-  font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+/* ── Account control (topbar) ──────────────────────────────────
+   Hidden until GET /api/auth/me answers; stays hidden for the whole
+   session if accounts are unavailable, so the site behaves exactly as it
+   does today. Signed out: one "Sign in" button. Signed in: the account's
+   email, truncated on narrow screens, opening a small menu with "Sign out" —
+   one obvious control, never two things fighting for the same click. */
+.account {
+  display: flex; align-items: center; gap: 8px;
   padding-left: 18px; border-left: 1px solid var(--rule);
+  position: relative;
 }
-.source .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--match); }
-.source[data-live="false"] .dot { background: var(--ink-3); }
+.account[hidden] { display: none; }
+.account-btn {
+  font-family: inherit; font-size: 13px; font-weight: 600; color: var(--ink);
+  background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: var(--r);
+  padding: 8px 14px; min-height: 40px; cursor: pointer; white-space: nowrap;
+}
+.account-btn:hover { background: var(--surface); border-color: var(--ink-3); }
+.account-user-wrap[hidden] { display: none; }
+.account-email-btn { max-width: 140px; display: inline-flex; }
+.account-email-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.account-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r);
+  box-shadow: var(--shadow); min-width: 140px; padding: 6px;
+}
+.account-menu[hidden] { display: none; }
+.account-menu-item {
+  display: block; width: 100%; text-align: left; font-family: inherit; font-size: 13.5px;
+  color: var(--ink); background: none; border: 0; border-radius: 4px; padding: 10px;
+  min-height: 40px; cursor: pointer;
+}
+.account-menu-item:hover { background: var(--surface-2); }
+
+@media (max-width: 860px) {
+  .account { padding-left: 10px; }
+  .account-email-btn { max-width: 96px; }
+}
+@media (max-width: 420px) {
+  .account-btn { font-size: 12.5px; padding: 7px 10px; }
+  .account-email-btn { max-width: 72px; }
+}
 
 main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 .view-head { margin-bottom: 24px; }
@@ -481,6 +516,33 @@ a.btn { text-decoration: none; display: inline-block; }
   .drop-grid { grid-template-columns: 1fr; }
 }
 
+/* ── #/account: create-account / sign-in form ──────────────────── */
+.account-reassure { font-size: 12.5px; color: var(--ink-2); margin: 8px 0 0; max-width: 50ch; }
+.account-form { max-width: 420px; display: flex; flex-direction: column; gap: 16px; margin-top: 20px; }
+.password-wrap { position: relative; display: flex; align-items: center; }
+.password-wrap .field-input { flex: 1 1 auto; padding-right: 62px; }
+.password-toggle { position: absolute; right: 10px; min-height: 32px; padding: 2px 0; }
+.account-error {
+  font-size: 13px; color: var(--mismatch); background: var(--mismatch-bg);
+  border: 1px solid #F0C3BF; border-radius: var(--r); padding: 10px 12px;
+}
+.account-error[hidden] { display: none; }
+.account-switch { margin: 2px 0 0; }
+.account-switch .link-btn { padding: 0; min-height: 44px; display: inline-flex; align-items: center; }
+.account-form .check-actions .btn { min-height: 44px; }
+
+/* ── Add mail: "Drop .eml files" / "Paste an email" tabs ───────── */
+.addmail { margin-bottom: 18px; }
+.addmail[hidden] { display: none; }
+.addmail-tabs {
+  display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 14px;
+  background: var(--surface-2); border: 1px solid var(--rule); border-radius: var(--r);
+}
+.switch-btn[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); font-weight: 600; }
+.addmail-section[hidden] { display: none; }
+.paste-form { display: flex; flex-direction: column; gap: 14px; max-width: 560px; }
+.paste-files-input { padding: 8px 11px; }
+
 /* ── Your mail / Sample source switch ──────────────────────── */
 .source-switch {
   display: inline-flex; gap: 2px; padding: 3px;
@@ -501,19 +563,18 @@ a.btn { text-decoration: none; display: inline-block; }
 }
 
 /* ── Your mail: empty state ────────────────────────────────── */
-.mine-empty { max-width: 560px; margin: 0 auto 8px; text-align: center; }
 .drop-zone-large { padding: 8px; }
 .drop-zone-large .drop-label { padding: 48px 20px; }
 .drop-zone-large .drop-title { font-size: 18px; }
 .drop-zone-large .drop-hint { text-decoration: underline; text-underline-offset: 2px; }
-.mine-howto, .mine-privacy {
-  font-size: 12.5px; color: var(--ink-3); margin: 14px 0 0; max-width: 46ch;
-  margin-left: auto; margin-right: auto;
-}
-.mine-privacy { color: var(--ink-2); }
+.mine-howto { font-size: 12px; color: var(--ink-3); margin: 12px 0 0; max-width: 46ch; }
+.mine-privacy { font-size: 12.5px; color: var(--ink-2); margin: 0 0 18px; max-width: 50ch; }
+.mine-privacy[hidden] { display: none; }
+.mine-privacy .link-btn { margin-left: 2px; }
 .mine-empty-actions {
-  display: flex; justify-content: center; gap: 20px; margin-top: 22px; flex-wrap: wrap;
+  display: flex; justify-content: flex-start; gap: 20px; margin: 0 0 22px; flex-wrap: wrap;
 }
+.mine-empty-actions[hidden] { display: none; }
 .mine-empty-actions .link-btn { display: inline-flex; align-items: center; min-height: 44px; }
 
 /* ── Your mail: populated state toolbar ────────────────────── */
@@ -528,7 +589,7 @@ a.btn { text-decoration: none; display: inline-block; }
 .mine-actions .link-btn { display: inline-flex; align-items: center; min-height: 44px; }
 
 #view-board.drag-over #board-normal,
-#view-board.drag-over #mine-empty { outline: 2px dashed var(--marine); outline-offset: 6px; border-radius: var(--r); }
+#view-board.drag-over #addmail-panel { outline: 2px dashed var(--marine); outline-offset: 6px; border-radius: var(--r); }
 
 /* ── Upload flow ────────────────────────────────────────────── */
 .upload-panel { margin-bottom: 16px; }
@@ -587,11 +648,10 @@ a.btn { text-decoration: none; display: inline-block; }
 @media (max-width: 860px) { .cmp-row { grid-template-columns: 1fr 80px 80px; } }
 
 /* ── phone top bar ─────────────────────────────────────────────
-   Three nav links plus the data-source chip were 444px wide on a 375px
-   phone, so every page scrolled sideways. On narrow screens the chip goes
-   (it is diagnostic, not something a clerk acts on) and the nav tightens. */
+   Three nav links plus a topbar chip were 444px wide on a 375px phone, so
+   every page scrolled sideways. The account control stays (a clerk acts on
+   it — sign in, sign out) but shrinks; the nav tightens around it. */
 @media (max-width: 860px) {
-  .source { display: none; }
   .nav { gap: 2px; }
   .nav-link { padding: 7px 9px; font-size: 13.5px; white-space: nowrap; }
 }
@@ -600,10 +660,18 @@ a.btn { text-decoration: none; display: inline-block; }
   .mark { display: none; }
 }
 @media (max-width: 380px) {
+  .topbar { padding: 0 10px; gap: 6px; }
   .nav { gap: 0; }
   /* The logo already links home; one fewer choice keeps the nav on one line. */
   .nav-link[data-route="home"] { display: none; }
   .nav-link { padding: 7px 7px; font-size: 12.5px; }
+  /* A permanent account control (unlike the old diagnostic-only chip it
+     replaced) has to keep its room here too, so on the very narrowest
+     phones Accuracy — reachable from the home page's proof line — folds
+     away as well, the same trade the logo already makes for Home. */
+  .nav-link[data-route="accuracy"] { display: none; }
+  .account { padding-left: 6px; }
+  .account-email-btn { max-width: 56px; }
 }
 
 /* ── print ──────────────────────────────────────────────────────
@@ -617,9 +685,9 @@ a.btn { text-decoration: none; display: inline-block; }
   html, body { background: #fff; }
   body { color: #000; }
 
-  .topbar, .skip, .nav, .back, .tabs, .search-field, #toast,
+  .topbar, .skip, .nav, .back, .tabs, .search-field, #toast, .account,
   #check-form, button, .btn, .link-btn, .proof-btn,
-  #view-home, #view-board { display: none !important; }
+  #view-home, #view-board, #view-account { display: none !important; }
 
   .print-only { display: block; margin-bottom: 18px; }
   .print-only .print-title { font-weight: 800; font-size: 15px; }

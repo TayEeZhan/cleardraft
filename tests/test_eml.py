@@ -194,10 +194,14 @@ def test_wrong_extension_is_400():
 
 
 def test_missing_file_is_400():
+    """No `eml` file and no pasted `body` either: /api/process-email now has
+    a second request shape (paste-an-email mode, see api/index.py), so an
+    empty request falls through to that mode's own "nothing to process"
+    error rather than treating the absent `eml` field as a bad extension."""
     resp = client.post("/api/process-email", files={})
     assert resp.status_code == 400
     body = resp.json()
-    assert body["error"] == "unsupported_extension"
+    assert body["error"] == "missing_email"
 
 
 def test_oversized_file_is_400():

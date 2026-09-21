@@ -10,9 +10,16 @@ prefix.
 Routes:
     GET  /api/health          - liveness + parser/model availability
     POST /api/check            - compare an uploaded SI against an uploaded BL
-    POST /api/process-email    - parse an uploaded .eml, run it end to end
-                                  through classify/extract/compare/decide,
+    POST /api/process-email    - parse an uploaded .eml (or a pasted-in
+                                  subject/body + attachments), run it end to
+                                  end through classify/extract/compare/decide,
                                   same as the dataset path in core/pipeline.py
+    /api/auth/*, /api/mail*    - accounts: see api/_accounts.py
+
+Accounts note: /api/auth/* and /api/mail* are owned by api/_accounts.py and
+included below as a router. This module only calls `current_user()` to
+decide whether a /api/process-email result gets saved to that user's
+mailbox - no session/password logic lives here.
 """
 from __future__ import annotations
 
@@ -21,17 +28,20 @@ import os
 import sys
 import tempfile
 import time
+from email.message import EmailMessage
 
 # Repo root is the parent of this file's directory (api/). Insert it once, at
 # import time, so `import core` / `import adapters` resolve under Vercel's
 # function runtime the same way they do locally.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, File, Form, UploadFile  # noqa: E402
+from fastapi import FastAPI, File, Form, Request, UploadFile  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
 from adapters.eml import EmlError, parse_eml, safe_filename  # noqa: E402
 from adapters.model import STATS, available as model_available  # noqa: E402
+from adapters.store import StoreError, get_store  # noqa: E402
+from api._accounts import current_user, router as accounts_router, save_result_to_mailbox  # noqa: E402
 from core import parsers  # noqa: E402
 from core.classify import classify  # noqa: E402
 from core.compare import compare  # noqa: E402
@@ -42,6 +52,16 @@ from core.reply import FIELD_LABELS, _reference, draft_reply  # noqa: E402
 from core.types import Classification, Email  # noqa: E402
 
 app = FastAPI()
+app.include_router(accounts_router)
+
+
+@app.exception_handler(StoreError)
+async def _store_down(request, exc):
+    # The account store is unreachable. Say so cleanly; never a raw 500.
+    return JSONResponse(
+        status_code=503,
+        content={"error": "accounts_unavailable", "detail": "Accounts are temporarily unavailable. Try again shortly."},
+    )
 
 #: Case-insensitive extensions the four format adapters cover.
 _ALLOWED_EXTENSIONS = {".txt", ".pdf", ".xlsx", ".docx"}
@@ -52,6 +72,22 @@ _MAX_BYTES = 2 * 1024 * 1024
 #: 4 MB cap for an uploaded .eml. Vercel's own request-body limit is 4.5 MB,
 #: so this leaves headroom for multipart framing overhead.
 _EML_MAX_BYTES = 4 * 1024 * 1024
+
+#: "Paste an email" mode (no .eml file): caps for the pasted body and the
+#: attachments picked from the user's computer.
+_PASTE_BODY_MAX_CHARS = 50_000
+_PASTE_ATTACH_MAX_FILES = 4
+_PASTE_ATTACH_MAX_BYTES = 4 * 1024 * 1024
+
+#: (maintype, subtype) per extension, for building an EmailMessage out of
+#: pasted-mode attachments so they round-trip through parse_eml() exactly
+#: like a real .eml's attachments do.
+_ATTACHMENT_MIME = {
+    ".txt": ("text", "plain"),
+    ".pdf": ("application", "pdf"),
+    ".xlsx": ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    ".docx": ("application", "vnd.openxmlformats-officedocument.wordprocessingml.document"),
+}
 
 #: The web form IS an explicit request to compare - never the classifier's
 #: own read of subject/body. See spec step 5.
@@ -69,6 +105,7 @@ def health() -> dict:
     return {
         "status": "ok",
         "model_available": model_available(),
+        "accounts": get_store() is not None,
         "parsers": list(parsers.supported()),
         "missing_parsers": parsers.MISSING_PARSERS,
     }
@@ -252,45 +289,29 @@ async def check(
     return payload
 
 
-@app.post("/api/process-email")
-async def process_email(eml: "UploadFile | None" = File(None)):
-    """Upload-your-own-email demo path.
+def _process_eml_bytes(data: bytes, upload_name: str) -> "dict | JSONResponse":
+    """The one pipeline: raw .eml bytes in, {board, detail, model_delta} out.
 
-    Parses one .eml file (adapters/eml.py), builds a core.types.Email from
-    it, and runs the exact same classify -> extract -> compare -> decide ->
-    draft_reply chain as core/pipeline.process and scripts/export_ui_data.py,
-    so the response can be dropped straight into the same board/detail
-    renderers the dataset-backed UI already uses.
+    Shared by both `/api/process-email` request shapes - an uploaded .eml
+    file and a pasted subject/body (+ up to 4 attachments) that gets
+    serialised into the same RFC 5322 bytes first - so there is exactly one
+    copy of the classify -> extract -> compare -> decide -> draft_reply
+    chain, same as core/pipeline.process and scripts/export_ui_data.py.
 
     Nothing is written anywhere except a per-request tempfile.TemporaryDirectory,
     which is removed before this function returns. No email content is logged.
+
+    Returns a JSONResponse directly when `data` does not parse as an email;
+    callers must check for that before touching the result as a dict.
     """
-    started = time.time()
-
-    if eml is None or not eml.filename:
-        return _error(400, "unsupported_extension", "'eml' file is required")
-
-    ext = os.path.splitext(eml.filename)[1].lower()
-    if ext != ".eml":
-        return _error(
-            400, "unsupported_extension", f"'eml' file extension {ext!r} is not supported"
-        )
-
-    data = await _read_capped(eml, _EML_MAX_BYTES)
-    if data is None:
-        return _error(400, "file_too_large", "'eml' file exceeds 4 MB")
-
     try:
         parsed = parse_eml(data)
     except EmlError as exc:
         return _error(400, "not_an_email", str(exc))
 
-    # Dedupe re-uploads of the same file: same bytes -> same email_id, every
-    # time, with no state kept between requests.
+    # Dedupe re-uploads of the same bytes: same content -> same email_id,
+    # every time, with no state kept between requests.
     email_id = "up_" + hashlib.sha1(data).hexdigest()[:12]
-
-    # Basename only, for display - never used to build a filesystem path.
-    upload_name = eml.filename.replace("\\", "/").rsplit("/", 1)[-1]
 
     before = _stats_snapshot()
 
@@ -402,9 +423,119 @@ async def process_email(eml: "UploadFile | None" = File(None)):
     after = _stats_snapshot()
     model_delta = {key: after[key] - before[key] for key in before}
 
-    return {
+    return {"board": board, "detail": detail, "model_delta": model_delta}
+
+
+@app.post("/api/process-email")
+async def process_email(
+    request: Request,
+    eml: "UploadFile | None" = File(None),
+    subject: str = Form(""),
+    body: "str | None" = Form(None),
+    sender: str = Form(""),
+    files: "list[UploadFile]" = File(default=[]),
+):
+    """Upload-your-own-email demo path, in two request shapes:
+
+    1. An uploaded `eml` file (.eml, <= 4 MB) - unchanged from before.
+    2. "Paste an email": no `eml` file, but a pasted `subject`/`body` (body
+       required, <= 50,000 chars) plus 0-4 `files` (.txt/.pdf/.xlsx/.docx,
+       4 MB total) picked from the user's computer, for people who have the
+       email's text but not a saved .eml. This is built into the same RFC
+       5322 bytes an .eml upload would be and run through the identical
+       pipeline (`_process_eml_bytes`) - no duplicated logic.
+
+    When the caller is signed in (a valid `cd_session` cookie), the result
+    is also saved into that user's mailbox and the response carries
+    "saved": true; signed out, it carries "saved": false. Nothing is
+    written anywhere except a per-request tempfile.TemporaryDirectory. No
+    email content is logged.
+    """
+    started = time.time()
+
+    if eml is not None and eml.filename:
+        ext = os.path.splitext(eml.filename)[1].lower()
+        if ext != ".eml":
+            return _error(
+                400, "unsupported_extension", f"'eml' file extension {ext!r} is not supported"
+            )
+        data = await _read_capped(eml, _EML_MAX_BYTES)
+        if data is None:
+            return _error(400, "file_too_large", "'eml' file exceeds 4 MB")
+        # Basename only, for display - never used to build a filesystem path.
+        upload_name = eml.filename.replace("\\", "/").rsplit("/", 1)[-1]
+    else:
+        if body is None or not body.strip():
+            return _error(
+                400, "missing_email", "Upload a .eml file or paste the email text."
+            )
+        if len(body) > _PASTE_BODY_MAX_CHARS:
+            return _error(
+                400, "body_too_long", "Pasted email body exceeds 50,000 characters."
+            )
+        if len(files) > _PASTE_ATTACH_MAX_FILES:
+            return _error(400, "too_many_files", "Attach at most 4 files.")
+
+        attachments: "list[tuple[str, bytes]]" = []
+        total_bytes = 0
+        for upload in files:
+            if upload is None or not upload.filename:
+                continue
+            attachment_ext = os.path.splitext(upload.filename)[1].lower()
+            if attachment_ext not in _ALLOWED_EXTENSIONS:
+                return _error(
+                    400,
+                    "unsupported_extension",
+                    f"attachment extension {attachment_ext!r} is not supported",
+                )
+            remaining = _PASTE_ATTACH_MAX_BYTES - total_bytes
+            content = await upload.read(remaining + 1)
+            total_bytes += len(content)
+            if total_bytes > _PASTE_ATTACH_MAX_BYTES:
+                return _error(400, "file_too_large", "attachments exceed 4 MB total")
+            name = upload.filename.replace("\\", "/").rsplit("/", 1)[-1]
+            attachments.append((name, content))
+
+        msg = EmailMessage()
+        msg["From"] = (sender or "").strip() or "unknown@pasted.local"
+        msg["Subject"] = subject or ""
+        msg.set_content(body)
+        for name, content in attachments:
+            maintype, subtype = _ATTACHMENT_MIME.get(
+                os.path.splitext(name)[1].lower(), ("application", "octet-stream")
+            )
+            msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=name)
+        data = bytes(msg)
+        upload_name = "Pasted email"
+
+    result = _process_eml_bytes(data, upload_name)
+    if isinstance(result, JSONResponse):
+        return result
+
+    board, detail, model_delta = result["board"], result["detail"], result["model_delta"]
+
+    # Save into the signed-in user's mailbox, if any. The mailbox is capped
+    # at MAX_MAILBOX by dropping the oldest entries (see
+    # api._accounts.merge_mailbox), so it always makes room for one more -
+    # "save_failed" below is only ever hit if saving itself raises (e.g. a
+    # storage backend error), not because the cap could not be enforced.
+    saved = False
+    save_error = None
+    user_email = current_user(request)
+    if user_email is not None:
+        try:
+            save_result_to_mailbox(get_store(), user_email, board, detail)
+            saved = True
+        except Exception:
+            save_error = "save_failed"
+
+    payload = {
         "board": board,
         "detail": detail,
         "model": {"available": model_available(), **model_delta},
         "seconds": round(time.time() - started, 2),
+        "saved": saved,
     }
+    if not saved and save_error:
+        payload["save_error"] = save_error
+    return payload
