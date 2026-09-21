@@ -26,7 +26,11 @@ Layout Vercel expects:
 api/
   index.py          <- exposes `app`, a FastAPI instance
   requirements.txt  <- the API's own dependencies
-vercel.json         <- routes /api/* to the Python function
+vercel.json         <- serves web/ as the site; rewrites /api/* to api/index.py
+
+Vercel auto-detects any .py file under api/ as a Python function, so nothing
+in vercel.json needs to change when you add api/index.py. Until it exists,
+/api/* returns 404 and the UI falls back to web/public/data.json on its own.
 web/                <- the Next.js UI
 ```
 
