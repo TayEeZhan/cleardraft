@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15,12 +16,13 @@
 <a class="skip" href="#main">Skip to content</a>
 
 <header class="topbar">
-  <div class="brand">
+  <a class="brand" href="#/">
     <span class="mark" aria-hidden="true"></span>
     <span class="brand-name">ClearDraft</span>
     <span class="brand-sub">SI / BL verification</span>
-  </div>
+  </a>
   <nav class="nav" aria-label="Views">
+    <a href="#/" data-route="home" class="nav-link">Home</a>
     <a href="#/board" data-route="board" class="nav-link">Inbox</a>
     <a href="#/check" data-route="check" class="nav-link">Check a pair</a>
     <a href="#/accuracy" data-route="accuracy" class="nav-link">Accuracy</a>
@@ -30,12 +32,45 @@
   </div>
 </header>
 
+<div id="print-header" class="print-only">
+  <div class="print-title">ClearDraft check report</div>
+  <div class="print-ref" id="print-ref"></div>
+  <div class="print-time" id="print-time"></div>
+</div>
+
 <main id="main">
+
+  <section id="view-home" class="view">
+    <div class="home-hero">
+      <h1>Catch Bill of Lading errors before they ship.</h1>
+      <p class="lede">ClearDraft compares the draft Bill of Lading with the Shipping Instruction on 7 fields, shows the line it read each value from, and asks a person when it isn't sure.</p>
+      <a href="#/case/email_004" class="btn btn-primary btn-large">See a real check</a>
+      <p class="hero-caption">A draft with two wrong fields, the source lines, and the reply it drafted.</p>
+    </div>
+
+    <div class="home-cards">
+      <a class="home-card" href="#/check">
+        <div class="home-card-title">Check your own documents</div>
+        <div class="home-card-line">Upload an SI and a draft BL, or try a sample.</div>
+      </a>
+      <a class="home-card" href="#/board">
+        <div class="home-card-title">Open the inbox</div>
+        <div class="home-card-line" id="home-inbox-line">Loading counts…</div>
+      </a>
+    </div>
+
+    <a class="home-proof" id="home-proof" href="#/accuracy">Loading numbers…</a>
+  </section>
 
   <section id="view-board" class="view">
     <div class="view-head">
       <h1>Inbox</h1>
       <p class="lede">One shared mailbox, <b id="total-count">520</b> messages. Every one has been read, sorted, and — where documents were attached — checked field by field.</p>
+    </div>
+
+    <div class="search-field">
+      <label for="inbox-search" class="visually-hidden">Search the inbox</label>
+      <input type="search" id="inbox-search" class="search-input" placeholder="Search reference, subject, sender or field" autocomplete="off">
     </div>
 
     <div class="tabs" role="tablist" aria-label="Filter by outcome">

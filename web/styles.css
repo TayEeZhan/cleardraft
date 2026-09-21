@@ -61,7 +61,7 @@ a { color: inherit; }
   background: var(--surface);
   border-bottom: 1px solid var(--rule);
 }
-.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand { display: flex; align-items: baseline; gap: 10px; text-decoration: none; }
 .mark {
   width: 10px; height: 18px; align-self: center; border-radius: 1px;
   background: linear-gradient(to bottom, var(--marine) 0 46%, transparent 46% 54%, var(--mismatch) 54% 100%);
@@ -92,6 +92,52 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 .view-head h1 { font-size: 30px; }
 .lede { margin: 6px 0 0; color: var(--ink-2); max-width: 66ch; }
 .lede b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* ── Home / main menu ──────────────────────────────────────────
+   Hick's law: one obvious primary action, two lighter-weight secondary
+   cards below it, one quiet proof line at the very bottom. Nothing else
+   competes for the first click. */
+.home-hero { max-width: 62ch; margin: 12px 0 40px; }
+.home-hero h1 { font-size: 34px; line-height: 1.15; }
+.home-hero .lede { margin: 12px 0 24px; max-width: 56ch; }
+.btn-large { font-size: 16px; padding: 15px 30px; min-height: 44px; }
+.hero-caption { margin: 10px 0 0; font-size: 13px; color: var(--ink-3); max-width: 46ch; }
+
+.home-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 32px; }
+.home-card {
+  display: block; background: var(--surface); border: 1px solid var(--rule);
+  border-radius: var(--r); padding: 18px 20px; text-decoration: none;
+  color: inherit; min-height: 44px; transition: border-color .12s, background-color .12s;
+}
+.home-card:hover { border-color: var(--rule-2); background: var(--surface-2); }
+.home-card-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+.home-card-line { font-size: 13px; color: var(--ink-2); }
+
+.home-proof {
+  display: inline-block; font-family: var(--mono); font-size: 12px;
+  color: var(--ink-2); text-decoration: none; border-bottom: 1px dotted var(--rule-2);
+  padding-bottom: 1px;
+}
+.home-proof:hover { color: var(--ink-2); border-color: var(--ink-3); }
+
+@media (max-width: 860px) {
+  .home-hero h1 { font-size: 26px; }
+  .home-cards { grid-template-columns: 1fr; }
+}
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+.search-field { margin-bottom: 16px; }
+.search-input {
+  width: 100%; max-width: 420px; min-height: 40px; font-family: inherit;
+  font-size: 13.5px; color: var(--ink); padding: 9px 12px;
+  border: 1px solid var(--rule-2); border-radius: var(--r); background: var(--surface);
+}
+.search-input:focus-visible { outline: 2px solid var(--marine); outline-offset: 1px; }
+.search-input::-webkit-search-cancel-button { cursor: pointer; }
 
 .tabs {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
@@ -136,13 +182,15 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 
 .empty { padding: 48px 16px; text-align: center; color: var(--ink-3); background: var(--surface); }
 
-.back { display: inline-block; margin-bottom: 18px; font-size: 13.5px; color: var(--ink-2); text-decoration: none; }
+.back { display: inline-flex; align-items: center; min-height: 44px; margin-bottom: 6px; font-size: 13.5px; color: var(--ink-2); text-decoration: none; }
 .back:hover { color: var(--ink); text-decoration: underline; }
 .back::before { content: "\2190"; margin-right: 6px; }
 
-.case-head { margin-bottom: 22px; }
+.case-head { margin-bottom: 8px; }
+.print-btn { display: inline-flex; align-items: center; min-height: 44px; margin: 0 0 14px; }
+.print-only { display: none; }
 .case-head .ref { font-family: var(--mono); font-size: 13px; color: var(--marine); font-weight: 500; }
-.case-head h2 { font-size: 21px; margin: 4px 0 8px; }
+.case-head h1 { font-size: 21px; margin: 4px 0 8px; }
 .case-meta { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); }
 .case-meta span { font-family: var(--mono); font-size: 12px; }
 
@@ -456,4 +504,48 @@ a.btn { text-decoration: none; display: inline-block; }
 @media (max-width: 420px) {
   .brand-name { font-size: 16px; }
   .mark { display: none; }
+}
+@media (max-width: 380px) {
+  .nav { gap: 0; }
+  /* The logo already links home; one fewer choice keeps the nav on one line. */
+  .nav-link[data-route="home"] { display: none; }
+  .nav-link { padding: 7px 7px; font-size: 12.5px; }
+}
+
+/* ── print ──────────────────────────────────────────────────────
+   Only the view on screen prints: the case review or the Check-a-pair
+   result. Chrome, controls and every button disappear; the seam table,
+   verdict and reply text stay, with the print-only header filled in by
+   the "Print / save as PDF" button right before window.print(). */
+@media print {
+  @page { margin: 14mm; }
+
+  html, body { background: #fff; }
+  body { color: #000; }
+
+  .topbar, .skip, .nav, .back, .tabs, .search-field, #toast,
+  #check-form, button, .btn, .link-btn, .proof-btn,
+  #view-home, #view-board { display: none !important; }
+
+  .print-only { display: block; margin-bottom: 18px; }
+  .print-only .print-title { font-weight: 800; font-size: 15px; }
+  .print-only .print-ref { font-family: var(--mono); font-size: 12px; margin-top: 3px; }
+  .print-only .print-time { font-family: var(--mono); font-size: 11px; color: #333; margin-top: 2px; }
+
+  main { max-width: none; margin: 0; padding: 0; }
+
+  .verdict, .seam-row, .reply-card, .recheck, .verdict-text {
+    break-inside: avoid;
+    box-shadow: none !important;
+  }
+
+  .verdict, .chip {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .seam-wrap, .reply-card, .recheck, .panel, .stat, .cmp, .case-list {
+    box-shadow: none !important;
+    border-color: #999 !important;
+  }
 }

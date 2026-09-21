@@ -8,6 +8,9 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 
 let DATA = null;
 let TAB = "mismatch";
+let QUERY = "";
+
+function pct(x) { return `${Math.round(x * 100)}%`; }
 
 async function load() {
   try {
@@ -47,12 +50,24 @@ const REASON = {
   unclassified: "could not tell what it wants",
 };
 
+/* Case-insensitive substring search across reference, subject, sender and
+   the defect fields — including the human-readable form ("notify party")
+   so a clerk never has to type the machine name ("notify_party"). */
+function matchesQuery(r, q) {
+  if (!q) return true;
+  const hay = [r.reference, r.subject, r.from].filter(Boolean).join(" • ").toLowerCase();
+  if (hay.includes(q)) return true;
+  const fields = r.defect_fields || [];
+  return fields.some((f) => f.toLowerCase().includes(q) || f.replace(/_/g, " ").toLowerCase().includes(q));
+}
+
 function renderBoard() {
   const list = $("#case-list");
   list.replaceChildren();
-  const rows = DATA.board.filter((r) => tabOf(r) === TAB);
+  const q = QUERY.trim().toLowerCase();
+  const rows = DATA.board.filter((r) => tabOf(r) === TAB && matchesQuery(r, q));
 
-  if (!rows.length) { list.append(el("div", "empty", "Nothing here.")); return; }
+  if (!rows.length) { list.append(el("div", "empty", q ? "No matches in this tab." : "Nothing here.")); return; }
 
   for (const r of rows.slice(0, 200)) {
     const a = el("a", "case");
@@ -82,6 +97,46 @@ function setTab(t) {
   TAB = t;
   for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === t));
   renderBoard();
+}
+
+/* Tab counts track the current search too, so a clerk can see at a glance
+   which tabs hold a match without opening each one. */
+function updateTabCounts() {
+  const q = QUERY.trim().toLowerCase();
+  for (const [k, total] of Object.entries(DATA.counts)) {
+    const n = $(`#n-${k}`);
+    if (!n) continue;
+    n.textContent = q ? DATA.board.filter((r) => tabOf(r) === k && matchesQuery(r, q)).length : total;
+  }
+}
+
+function initSearch() {
+  const input = $("#inbox-search");
+  if (!input) return;
+  input.addEventListener("input", () => {
+    QUERY = input.value;
+    updateTabCounts();
+    renderBoard();
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && input.value) {
+      e.stopPropagation();
+      input.value = "";
+      QUERY = "";
+      updateTabCounts();
+      renderBoard();
+    }
+  });
+
+  addEventListener("keydown", (e) => {
+    if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+    const a = document.activeElement;
+    const tag = a && a.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (a && a.isContentEditable)) return;
+    e.preventDefault();
+    if (location.hash !== "#/board") location.hash = "#/board";
+    setTimeout(() => { const s = $("#inbox-search"); if (s) s.focus(); }, 0);
+  });
 }
 
 /* core/ speaks machine field names; a clerk should never see one. */
@@ -131,6 +186,23 @@ function renderVerdict(d, host, { reply = true } = {}) {
   if (reply) host.append(replyCard(d, d.reply_draft, "Reply, ready to send", null));
 }
 
+/* Prints only the view on screen; the @media print rules strip the rest.
+   The print-only header is filled on beforeprint, so Ctrl+P gets the same
+   header as the button and a previous case's reference never lingers. */
+function printButton() {
+  const btn = el("button", "link-btn print-btn", "Print / save as PDF");
+  btn.type = "button";
+  btn.addEventListener("click", () => window.print());
+  return btn;
+}
+
+addEventListener("beforeprint", () => {
+  const h = location.hash;
+  const d = h.startsWith("#/case/") && DATA && DATA.detail[h.slice("#/case/".length)];
+  $("#print-ref").textContent = d ? d.reference : h.startsWith("#/check") ? "Uploaded pair" : "";
+  $("#print-time").textContent = `Printed ${new Date().toLocaleString()}`;
+});
+
 function renderReview(id) {
   const d = DATA.detail[id];
   const host = $("#review-body");
@@ -140,13 +212,14 @@ function renderReview(id) {
   const head = el("div", "case-head");
   head.innerHTML = `
     <div class="ref">${esc(d.reference)}</div>
-    <h2>${esc(d.subject)}</h2>
+    <h1>${esc(d.subject)}</h1>
     <div class="case-meta">
       <span>${esc(d.from)}</span>
       <span>${esc(d.category.replace(/_/g, " ").toLowerCase())}</span>
       <span>decided by ${esc(d.decided_by)}</span>
     </div>`;
   host.append(head);
+  host.append(printButton());
 
   if (d.recheck) {
     renderVerdict(d, host, { reply: false });
@@ -387,7 +460,6 @@ function renderAccuracy() {
    adds. This panel reports a held-out set written without reference to our
    rules, run twice: rules alone, then rules with the model as fallback. */
 function challengePanel(c) {
-  const pct = (x) => `${Math.round(x * 100)}%`;
   const p = el("div", "panel");
   p.append(el("h3", null, "On mail it has never seen"));
   p.append(el("div", "sub", `${c.emails} held-out emails and ${c.doc_pairs.length} document pairs, written without reference to our rules. Each run twice.`));
@@ -496,6 +568,8 @@ function renderCheckResult(data) {
     host.append(el("div", "check-meta", `The email reads as: ${String(er.category || "").toLowerCase()} / ${er.intent} (decided by ${er.decided_by})`));
   }
 
+  host.append(printButton());
+
   renderVerdict(data, host);
 }
 
@@ -575,12 +649,38 @@ function initCheckPage() {
   $("#sample-inbox").addEventListener("click", () => loadSample("inbox"));
 }
 
+/* The main menu / home screen. One primary action, two secondary cards, one
+   quiet proof line — everything else lives one click away, never crowding
+   this screen. Built only from data already loaded; every number is
+   optional-guarded so a missing field just drops its clause, never breaks
+   the render. */
+function renderHome() {
+  if (!DATA) return;
+
+  const inboxLine = $("#home-inbox-line");
+  if (inboxLine && DATA.counts) {
+    inboxLine.textContent = `${DATA.counts.mismatch} discrepancies and ${DATA.counts.needs_review} cases waiting for a person`;
+  }
+
+  const proof = $("#home-proof");
+  if (proof && DATA.stats) {
+    const s = DATA.stats;
+    const parts = [];
+    if (s.totals && typeof s.totals.emails === "number") parts.push(`${s.totals.emails} messages read`);
+    if (s.totals && typeof s.totals.defects_found === "number") parts.push(`${s.totals.defects_found} discrepancies caught`);
+    if (s.challenge && s.challenge.category_accuracy && typeof s.challenge.category_accuracy.with_model === "number") {
+      parts.push(`${pct(s.challenge.category_accuracy.with_model)} of never-seen mail sorted correctly`);
+    }
+    if (parts.length) proof.textContent = parts.join(" · ");
+  }
+}
+
 function route() {
-  const h = location.hash || "#/board";
-  const views = { board: $("#view-board"), review: $("#view-review"), accuracy: $("#view-accuracy"), check: $("#view-check") };
+  const h = location.hash;
+  const views = { home: $("#view-home"), board: $("#view-board"), review: $("#view-review"), accuracy: $("#view-accuracy"), check: $("#view-check") };
   for (const v of Object.values(views)) v.hidden = true;
 
-  let active = "board";
+  let active = "home";
   if (h.startsWith("#/case/")) {
     active = "review";
     views.review.hidden = false;
@@ -592,9 +692,16 @@ function route() {
   } else if (h.startsWith("#/check")) {
     active = "check";
     views.check.hidden = false;
-  } else {
+  } else if (h.startsWith("#/board")) {
+    active = "board";
     views.board.hidden = false;
     renderBoard();
+  } else {
+    // "", "#", "#/", and any hash we don't recognise all land on the home
+    // screen rather than a dead page.
+    active = "home";
+    views.home.hidden = false;
+    renderHome();
   }
 
   for (const a of document.querySelectorAll(".nav-link")) {
@@ -623,14 +730,12 @@ function toast(msg) {
   }
 
   $("#total-count").textContent = DATA.board.length;
-  for (const [k, v] of Object.entries(DATA.counts)) {
-    const n = $(`#n-${k}`);
-    if (n) n.textContent = v;
-  }
+  updateTabCounts();
   for (const b of document.querySelectorAll(".tab")) {
     b.addEventListener("click", () => setTab(b.dataset.tab));
   }
   initCheckPage();
+  initSearch();
   addEventListener("hashchange", route);
   route();
 })();
