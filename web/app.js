@@ -28,6 +28,45 @@ let ADDMAIL_TAB = "drop";    // "drop" | "paste" — which add-mail tab shows
 let ADDMAIL_TAB_TOUCHED = false; // has the visitor picked a tab themselves this session?
 let ADDMAIL_OPEN = false;    // populated "Your mail": is the add-mail panel open
 
+/* Reply text a clerk has typed over the drafted body. Session-only (a plain
+   Map, not localStorage) — keyed by email_id + which reply ("reply" or
+   "recheck"), so the normal reply and the recheck follow-up never clobber
+   each other, and navigating away and back to the same case still shows
+   what was typed. */
+const EDITS = new Map();
+
+/* Which cases a clerk has marked done. Persisted per-browser only — every
+   access is try/caught, same pattern as loadMine()/saveMine(). */
+function loadDone() {
+  try {
+    const raw = localStorage.getItem("cleardraft.done.v1");
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return new Set(arr);
+  } catch { /* corrupt or inaccessible storage — start empty */ }
+  return new Set();
+}
+let DONE = loadDone();
+/* Set by navigateToCase() right before it changes the hash; consumed once
+   by whichever renderReview() call turns out to be the render that sticks
+   (see navigateToCase() below for why that can't just be a direct focus() call). */
+let FOCUS_CASE_HEADING = false;
+function saveDone() {
+  try { localStorage.setItem("cleardraft.done.v1", JSON.stringify([...DONE])); } catch { /* per-browser convenience only */ }
+}
+function isDone(id) { return DONE.has(id); }
+function setDone(id, val) {
+  if (val) DONE.add(id); else DONE.delete(id);
+  saveDone();
+}
+
+const TAB_LABELS = {
+  mismatch: "Discrepancy found",
+  needs_review: "Needs a human",
+  cleared: "Cleared",
+  other: "Other mail",
+};
+
 function pct(x) { return `${Math.round(x * 100)}%`; }
 
 function loadMine() {
@@ -107,12 +146,14 @@ function renderBoard() {
 
   for (const r of rows.slice(0, 200)) {
     const a = el("a", "case");
+    if (isDone(r.email_id)) a.classList.add("case-done");
     a.href = `#/case/${r.email_id}`;
     a.setAttribute("role", "listitem");
     a.append(el("div", "case-ref", r.reference));
     a.append(el("div", "case-subject", r.subject));
 
     const tags = el("div", "case-fields");
+    if (isDone(r.email_id)) tags.append(el("span", "chip chip-done", "Done"));
     if (r.status === "MISMATCH") {
       for (const f of r.defect_fields) tags.append(el("span", "chip chip-mismatch", f.replace(/_/g, " ")));
     } else if (r.status === "NEEDS_REVIEW") {
@@ -307,7 +348,10 @@ function renderReview(id) {
      none of it is trusted as markup, escaped or not. */
   const head = el("div", "case-head");
   head.append(el("div", "ref", d.reference));
-  head.append(el("h1", null, d.subject));
+  const heading = el("h1", null, d.subject);
+  heading.id = "case-heading";
+  heading.tabIndex = -1;
+  head.append(heading);
   const meta = el("div", "case-meta");
   meta.append(el("span", null, d.from));
   meta.append(el("span", null, d.category.replace(/_/g, " ").toLowerCase()));
@@ -334,6 +378,13 @@ function renderReview(id) {
     host.append(replyCard(d, d.recheck.reply_draft, "Follow-up reply, ready to send", d.reply_draft));
   } else {
     renderVerdict(d, host);
+  }
+
+  host.append(doneBar(d));
+
+  if (FOCUS_CASE_HEADING) {
+    FOCUS_CASE_HEADING = false;
+    heading.focus();
   }
 }
 
@@ -403,18 +454,86 @@ function seamTable(d) {
   return wrap;
 }
 
-/* One primary action: open a real, pre-filled draft in the clerk's own mail
-   app. It is a mailto: link - ClearDraft still cannot send anything; the
-   clerk's own client opens with the text in it, and the clerk presses Send. */
+/* Editable, auto-growing reply. Edits live in EDITS (session-only, keyed by
+   email_id + which reply) so navigating away and back keeps them. Primary
+   action opens a pre-filled compose window straight in Gmail; ClearDraft
+   still never sends anything — the clerk checks it and presses Send. */
 function replyCard(d, text, title, earlier) {
+  const which = earlier ? "recheck" : "reply";
+  const key = `${d.email_id || "adhoc"}::${which}`;
+  const draftText = text || "";
+  const startText = EDITS.has(key) ? EDITS.get(key) : draftText;
+
   const card = el("div", "reply-card");
+
   const head = el("div", "reply-head");
   head.append(el("h3", null, title));
-  head.append(el("div", "reply-note", "Built from the checked values. Not written by a model."));
+  const metaRow = el("div", "reply-meta-row");
+  metaRow.append(el("span", "reply-note", "Built from the checked values. Not written by a model."));
+  const editedChip = el("span", "chip chip-quiet reply-edited-chip", "Edited");
+  const resetBtn = el("button", "link-btn reply-reset-btn", "Reset to draft");
+  resetBtn.type = "button";
+  metaRow.append(editedChip, resetBtn);
+  head.append(metaRow);
   card.append(head);
 
-  const body = el("div", "reply-body", text || "");
-  card.append(body);
+  const fieldId = `reply-text-${key.replace(/[^a-zA-Z0-9]+/g, "-")}`;
+  const label = el("label", "visually-hidden", "Reply text");
+  label.setAttribute("for", fieldId);
+  card.append(label);
+
+  const ta = document.createElement("textarea");
+  ta.id = fieldId;
+  ta.className = "reply-textarea";
+  ta.setAttribute("spellcheck", "true");
+  ta.setAttribute("autocapitalize", "sentences");
+  ta.setAttribute("autocorrect", "on");
+  ta.value = startText;
+  card.append(ta);
+
+  const subject = /^re[:_]/i.test(d.subject) ? d.subject : `RE: ${d.subject}`;
+  function mailtoHref(t) {
+    return `mailto:${encodeURIComponent(d.from || "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(t)}`;
+  }
+
+  function syncEditedUI() {
+    const edited = EDITS.has(key) && EDITS.get(key) !== draftText;
+    editedChip.hidden = !edited;
+    resetBtn.hidden = !edited;
+  }
+  syncEditedUI();
+
+  function autoGrow() {
+    // A hidden view has zero width, where the text wraps one character per
+    // line and scrollHeight is thousands of pixels. Measure only when laid out.
+    if (!ta.isConnected || ta.clientWidth === 0) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight + 2}px`;
+  }
+  // Re-measure whenever the width changes: the view becoming visible, a phone
+  // rotating, a window resizing. Height changes do not re-trigger it.
+  let lastWidth = 0;
+  new ResizeObserver(() => {
+    if (ta.clientWidth !== lastWidth) { lastWidth = ta.clientWidth; autoGrow(); }
+  }).observe(ta);
+  queueMicrotask(autoGrow);
+  setTimeout(autoGrow, 0);
+
+  ta.addEventListener("input", () => {
+    EDITS.set(key, ta.value);
+    syncEditedUI();
+    autoGrow();
+    otherBtn.href = mailtoHref(ta.value);
+  });
+
+  resetBtn.addEventListener("click", () => {
+    EDITS.delete(key);
+    ta.value = draftText;
+    syncEditedUI();
+    autoGrow();
+    otherBtn.href = mailtoHref(draftText);
+    ta.focus();
+  });
 
   if (earlier) {
     const past = el("details", "reply-past");
@@ -424,29 +543,207 @@ function replyCard(d, text, title, earlier) {
   }
 
   const foot = el("div", "reply-foot");
-  const subject = /^re[:_]/i.test(d.subject) ? d.subject : `RE: ${d.subject}`;
-  const open = el("a", "btn btn-primary", "Open draft in mail app");
-  open.href = `mailto:${encodeURIComponent(d.from)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text || "")}`;
-  open.addEventListener("click", () => toast("Draft opened in your mail app. Check it, then press Send."));
-  foot.append(open);
 
-  const copy = el("button", "btn btn-quiet", "Copy text");
-  copy.addEventListener("click", async () => {
+  const gmailBtn = el("button", "btn btn-primary", "Open in Gmail");
+  gmailBtn.type = "button";
+  gmailBtn.addEventListener("click", async () => {
+    const currentText = ta.value;
+    const toPart = d.from ? `&to=${encodeURIComponent(d.from)}` : "";
+    const url = `https://mail.google.com/mail/?view=cm&fs=1${toPart}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(currentText)}`;
+    if (url.length > 7500) {
+      try {
+        await navigator.clipboard.writeText(currentText);
+      } catch {
+        ta.focus();
+        ta.select();
+      }
+      toast("Reply copied — Gmail's link limit was hit, paste it into the email.");
+      return;
+    }
+    window.open(url, "_blank", "noopener");
+    toast("Gmail opened with your reply. Check it, then press Send.");
+  });
+  foot.append(gmailBtn);
+
+  const copyBtn = el("button", "btn btn-quiet", "Copy text");
+  copyBtn.type = "button";
+  copyBtn.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(text || "");
+      await navigator.clipboard.writeText(ta.value);
       toast("Reply copied.");
     } catch {
-      const r = document.createRange();
-      r.selectNodeContents(body);
-      const sel = getSelection();
-      sel.removeAllRanges(); sel.addRange(r);
+      ta.focus();
+      ta.select();
       toast("Selected - press Ctrl+C to copy.");
     }
   });
-  foot.append(copy);
+  foot.append(copyBtn);
+
+  const otherBtn = el("a", "btn btn-quiet", "Other mail app");
+  otherBtn.href = mailtoHref(startText);
+  otherBtn.addEventListener("click", () => toast("Draft opened in your mail app. Check it, then press Send."));
+  foot.append(otherBtn);
+
   foot.append(el("span", "btn-hint", "ClearDraft never sends mail. You do."));
   card.append(foot);
   return card;
+}
+
+/* ── Done — next case ───────────────────────────────────────────
+   Which board (Your mail / Sample) a case belongs to, and its filtered
+   list order — the exact order renderBoard() shows for that source, tab
+   and search query — so "Done — next" / "Skip" walk the list a clerk was
+   actually looking at, not some other order. */
+function boardFor(source) { return source === "mine" ? MINE.board : (DATA ? DATA.board : []); }
+
+function computeFilteredList(source, tab, query) {
+  const q = (query || "").trim().toLowerCase();
+  return boardFor(source).filter((r) => tabOf(r) === tab && matchesQuery(r, q));
+}
+
+function findRowById(id) {
+  const m = MINE.board.find((r) => r.email_id === id);
+  if (m) return { row: m, source: "mine" };
+  const s = DATA && DATA.board.find((r) => r.email_id === id);
+  if (s) return { row: s, source: "sample" };
+  return null;
+}
+
+/* If the case is part of the list currently on screen (same source, tab and
+   search), that is the list to walk. Otherwise (opened another way, e.g.
+   from the home page) fall back to the case's own source + tab, no query. */
+function getCaseListContext(id) {
+  const found = findRowById(id);
+  if (!found) return null;
+  const { row, source } = found;
+  const ownTab = tabOf(row);
+
+  if (SRC === source) {
+    const activeList = computeFilteredList(SRC, TAB, QUERY);
+    if (activeList.some((r) => r.email_id === id)) {
+      return { source: SRC, tab: TAB, query: QUERY, list: activeList };
+    }
+  }
+  return { source, tab: ownTab, query: "", list: computeFilteredList(source, ownTab, "") };
+}
+
+/* The next row, in list order, that is not done — wrapping around once.
+   Returns -1 when every other row (and the current one) is already done. */
+function nextUndoneIndex(list, fromIdx) {
+  const n = list.length;
+  for (let step = 1; step <= n; step++) {
+    const idx = (fromIdx + step) % n;
+    if (!isDone(list[idx].email_id)) return idx;
+  }
+  return -1;
+}
+
+/* Setting location.hash directly always queues an async native "hashchange"
+   event, on top of our own addEventListener("hashchange", route). Calling
+   route() here too, for an immediate render, would make renderReview() run
+   a second time right after — rebuilding the case heading and silently
+   dropping the focus() call below. history.pushState() moves the address
+   bar without firing any event, so this renders exactly once, synchronously,
+   in the same tick as the click/keypress that triggered it — and back/
+   forward through these entries still fires hashchange as usual, so the
+   browser's own history buttons keep working. */
+function navigateToCase(id) {
+  FOCUS_CASE_HEADING = true;
+  history.pushState(null, "", `#/case/${id}`);
+  route();
+}
+
+function goToBoardTab(source, tab, query, message) {
+  setSourceKey(source);
+  TAB = tab;
+  for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+  QUERY = query || "";
+  const searchInput = $("#inbox-search");
+  if (searchInput) searchInput.value = QUERY;
+  history.pushState(null, "", "#/board");
+  route();
+  if (message) toast(message);
+}
+
+function advanceCase(id, context, { requireUndone }) {
+  const { list, source, tab, query } = context;
+  const idx = list.findIndex((r) => r.email_id === id);
+  if (idx === -1) { goToBoardTab(source, tab, query, null); return; }
+
+  if (!requireUndone) {
+    navigateToCase(list[(idx + 1) % list.length].email_id);
+    return;
+  }
+  const nextIdx = nextUndoneIndex(list, idx);
+  if (nextIdx === -1) { goToBoardTab(source, tab, query, `All done in ${TAB_LABELS[tab]}.`); return; }
+  navigateToCase(list[nextIdx].email_id);
+}
+
+function doneBar(d) {
+  const id = d.email_id;
+  const context = getCaseListContext(id);
+  const done = isDone(id);
+
+  const bar = el("div", "done-bar");
+  const actions = el("div", "done-bar-actions");
+
+  const primaryBtn = el("button", "btn btn-primary", done ? "Next case" : "Done — next case");
+  primaryBtn.type = "button";
+  primaryBtn.addEventListener("click", () => {
+    if (!context) return;
+    if (!isDone(id)) setDone(id, true);
+    advanceCase(id, context, { requireUndone: true });
+  });
+  actions.append(primaryBtn);
+
+  const quietBtn = el("button", "link-btn", done ? "Mark as not done" : "Skip — next case");
+  quietBtn.type = "button";
+  quietBtn.addEventListener("click", () => {
+    if (isDone(id)) {
+      setDone(id, false);
+      renderReview(id);
+      return;
+    }
+    if (!context) return;
+    advanceCase(id, context, { requireUndone: false });
+  });
+  actions.append(quietBtn);
+  bar.append(actions);
+
+  if (context) {
+    const idx = context.list.findIndex((r) => r.email_id === id);
+    bar.append(el("div", "done-bar-pos", `Case ${idx + 1} of ${context.list.length} in ${TAB_LABELS[context.tab]}`));
+  }
+
+  bar.append(el("div", "done-bar-hint", "Press N to skip, D for done — next case."));
+  return bar;
+}
+
+/* "n" = Skip to next, "d" = Done — next case. Ignored while typing anywhere,
+   or with a modifier held, so it never fights the reply textarea. */
+function initCaseKeyboardNav() {
+  addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!location.hash.startsWith("#/case/")) return;
+    const k = e.key.toLowerCase();
+    if (k !== "n" && k !== "d") return;
+    const a = document.activeElement;
+    const tag = a && a.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (a && a.isContentEditable)) return;
+
+    const id = location.hash.slice("#/case/".length);
+    const d = lookupDetail(id);
+    if (!d) return;
+    const context = getCaseListContext(id);
+    if (!context) return;
+    e.preventDefault();
+    if (k === "n") {
+      advanceCase(id, context, { requireUndone: false });
+    } else {
+      if (!isDone(id)) setDone(id, true);
+      advanceCase(id, context, { requireUndone: true });
+    }
+  });
 }
 
 /* The second half of the job: the carrier sent a corrected draft. Every field
@@ -835,6 +1132,13 @@ function renderBoardView() {
   if (!showEmpty) {
     updateTabCounts();
     renderBoard();
+  }
+
+  const doneLine = $("#done-count-line");
+  if (doneLine) {
+    const doneCount = activeBoard().filter((r) => isDone(r.email_id)).length;
+    doneLine.hidden = doneCount <= 0;
+    if (doneCount > 0) doneLine.textContent = `${doneCount} done`;
   }
 }
 
@@ -1510,6 +1814,7 @@ function toast(msg) {
   initPasteForm();
   initAccountControl();
   initAccountForm();
+  initCaseKeyboardNav();
 
   const mineCard = $("#home-card-mine");
   if (mineCard) mineCard.addEventListener("click", () => setSourceKey("mine"));

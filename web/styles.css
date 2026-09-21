@@ -715,8 +715,13 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   body { color: #000; }
 
   .topbar, .skip, .nav, .back, .tabs, .search-field, #toast, .account,
-  #check-form, button, .btn, .link-btn, .proof-btn,
+  #check-form, button, .btn, .link-btn, .proof-btn, .done-bar,
   #view-home, #view-board, #view-account { display: none !important; }
+
+  .reply-textarea {
+    border: 0 !important; resize: none !important; overflow: visible !important;
+    background: transparent !important; color: #000 !important; padding: 16px !important;
+  }
 
   .print-only { display: block; margin-bottom: 18px; }
   .print-only .print-title { font-weight: 800; font-size: 15px; }
@@ -739,4 +744,39 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
     box-shadow: none !important;
     border-color: #999 !important;
   }
+}
+
+/* ── Editable reply + Open in Gmail ────────────────────────── */
+.reply-head { flex-direction: column; align-items: flex-start; gap: 6px; }
+.reply-meta-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.reply-reset-btn { padding: 0; min-height: auto; }
+.reply-textarea {
+  display: block; width: 100%; box-sizing: border-box;
+  font-family: var(--mono); font-size: 13px; line-height: 1.65;
+  padding: 16px; color: var(--ink); background: var(--surface);
+  border: 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  resize: none; overflow-y: hidden; min-height: 80px;
+}
+.reply-textarea:focus-visible { outline: 2px solid var(--marine); outline-offset: -2px; }
+
+/* ── Done — next case ───────────────────────────────────────── */
+.done-bar {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 12px 20px; margin-top: 24px; padding: 16px; background: var(--surface);
+  border: 1px solid var(--rule); border-radius: var(--r);
+}
+.done-bar-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.done-bar-actions .link-btn { display: inline-flex; align-items: center; min-height: 44px; }
+.done-bar-pos { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.done-bar-hint { display: none; font-size: 12px; color: var(--ink-3); }
+@media (min-width: 861px) { .done-bar-hint { display: inline; } }
+
+.chip-done { background: var(--surface-2); color: var(--ink-3); }
+.case.case-done { opacity: .6; }
+.done-count-line { font-size: 12.5px; color: var(--ink-2); margin: 0 0 14px; }
+.done-count-line[hidden] { display: none; }
+
+@media (max-width: 520px) {
+  .done-bar { flex-direction: column; align-items: stretch; }
+  .done-bar-actions { justify-content: space-between; }
 }
