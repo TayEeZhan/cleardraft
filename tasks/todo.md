@@ -26,14 +26,14 @@ Deadline: Tue 22 Sep 2026. Read `PLAN.md` first, then your own brief in
 - [x] `core/parsers/xlsx.py`
 - [x] `core/parsers/docx.py`
 - [x] `core/parsers/pdf.py`
-- [ ] Alias table extended beyond the generator's labels
+- [x] Alias table extended beyond the generator's labels (PR #3)
 - [x] `core/extract.py` with the verification gate
 
 ### Zi Qi — see `docs/BRIEF_ZI_QI.md`
 - [x] `core/classify.py` rule tier (Zi Qi, PR #1)
-- [ ] Model fallback through `adapters/model.py`
-- [ ] Dev slice, confusion matrix, macro-F1, regression test
-- [ ] Unit tests for `core/normalise.py`
+- [x] Model fallback through `adapters/model.py` (evidence-gated)
+- [x] Dev slice, confusion matrix, macro-F1, regression test (`eval/dev.py`, `eval/metrics.py`, `tests/test_eval.py`)
+- [x] Unit tests for `core/normalise.py` (`tests/test_normalise.py`)
 
 ### Ee Zhan
 - [x] `core/normalise.py`
@@ -56,9 +56,10 @@ extraction and classification are.
 - [x] FastAPI service: /api/health, /api/check (Vercel Python function)
 - [x] Web UI (static HTML/CSS/JS): board, review, accuracy, live checker
 - [x] Deploy to Vercel: https://cleardraft-one.vercel.app
-- [ ] `docker-compose.yml` for reproducibility
+- [x] Home menu, printable check report, inbox search (2026-09-21)
+- [ ] `docker-compose.yml` for reproducibility (after prelims)
 
-## Phase 4 — review  (Mon 22:00-Tue 02:00)
+## Phase 4 — review  (optional; after the submission is in)
 - [ ] `ecc:silent-failure-hunter` over the whole repository
 - [ ] `ecc:python-reviewer` over `core/`
 - [ ] `ecc:fastapi-reviewer` over `api/`
@@ -70,9 +71,9 @@ extraction and classification are.
 ## Phase 5 — submission  (Tue morning)
 - [ ] Slide deck, one artefact per rubric row — see `docs/RUBRIC_MAP.md`
 - [ ] Five-minute demo video, run against the live URL
-- [ ] Project description
-- [ ] Prototype link
-- [ ] Public repository, ground-truth labels excluded
+- [x] Project description text: `docs/PROJECT_DESCRIPTION.md` (still to paste into the submission form)
+- [x] Prototype link live: https://cleardraft-one.vercel.app (`/api/health` 200, `/api/check` live)
+- [x] Public repository, ground-truth labels excluded (checked: no `.env`, `.secrets/` or labels in any commit)
 
 
 ---
