@@ -7,7 +7,7 @@ the call count, the token spend and the cache hit rate are measurable in one
 place. "82% of decisions were made by a rule" is only a defensible claim if
 there is exactly one door the model can come through.
 
-Model: claude-haiku-4-5-20251001. Cheap and fast. We are doing constrained
+Model: claude-haiku-4-5 (exact ID, no date suffix, per the Claude API skill). Cheap and fast. We are doing constrained
 extraction and short classification, not reasoning, so a bigger model buys
 nothing here.
 """
@@ -17,7 +17,7 @@ import json
 import os
 from dataclasses import dataclass
 
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = "claude-haiku-4-5"
 
 
 @dataclass
@@ -29,6 +29,9 @@ class ModelStats:
     input_tokens: int = 0
     output_tokens: int = 0
     failures: int = 0
+    #: Model answers thrown away because they did not appear in the source
+    #: document. The anti-hallucination gate, counted rather than asserted.
+    gate_rejections: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -37,6 +40,7 @@ class ModelStats:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "failures": self.failures,
+            "gate_rejections": self.gate_rejections,
         }
 
 
@@ -79,8 +83,21 @@ def _load_dotenv() -> None:
         return
 
 
+# Load .env ONCE, at import. Re-reading it inside available() made the model
+# impossible to switch off: deleting ANTHROPIC_API_KEY from the environment was
+# silently undone on the next call. Tests and the rule-tier-only demo both rely
+# on "off" meaning off.
+_load_dotenv()
+
+
 def available() -> bool:
-    _load_dotenv()
+    """True when a key is configured and the model has not been switched off.
+
+    CLEARDRAFT_USE_MODEL=0 turns the model tier off without touching the key -
+    that is how we demonstrate, honestly, what the rules decide on their own.
+    """
+    if os.environ.get("CLEARDRAFT_USE_MODEL", "1").strip() == "0":
+        return False
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
@@ -142,7 +159,14 @@ def complete_json(prompt: str, *, schema_hint: str, max_tokens: int = 512) -> di
                 getattr(block, "text", "") for block in getattr(resp, "content", [])
             )
             return _extract_json(text)
-        except Exception as exc:  # provider error, timeout, or unparseable reply
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
+                anthropic.BadRequestError, anthropic.NotFoundError) as exc:
+            # Not transient: a bad key or a bad request fails identically on
+            # retry. The SDK already retries 429/5xx itself (max_retries=2), so
+            # our own second attempt exists only for unparseable replies.
+            last = exc
+            break
+        except Exception as exc:  # timeout after SDK retries, or unparseable reply
             last = exc
             if attempt == 2:
                 break

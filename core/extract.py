@@ -51,6 +51,20 @@ def verify_against_source(value: str, text: str) -> bool:
     return _normalise_ws(value) in _normalise_ws(text)
 
 
+def _locate(value: str, text: str) -> "tuple[int, str]":
+    """The first line containing `value`, so a model-read field still has proof.
+
+    The gate has already established the value is on the page; this records
+    WHERE, so the review screen can show the clerk the source line for a value
+    the model read - the values they should trust least deserve the most proof.
+    """
+    target = _normalise_ws(value)
+    for i, line in enumerate(text.splitlines(), 1):
+        if target in _normalise_ws(line):
+            return i, line.strip()
+    return 0, value  # spans a line break; the gate still matched the whole text
+
+
 def extract(path: str, *, use_model: bool = True) -> ExtractedDoc:
     """Read one attachment. Never raises.
 
@@ -82,6 +96,13 @@ def extract(path: str, *, use_model: bool = True) -> ExtractedDoc:
     if not use_model or not doc.readable:
         return doc
 
+    # Only an SI or a BL is worth asking about. A commercial invoice or packing
+    # list escalates as wrong_doc_type regardless, so reading shipping fields
+    # off it would spend money to produce nothing - and a field lifted from the
+    # wrong document is worse than no field.
+    if doc.kind not in ("SI", "BL"):
+        return doc
+
     missing = [f for f in COMPARE_FIELDS if f not in doc.fields]
     if not missing:
         return doc
@@ -96,7 +117,7 @@ def _fill_missing_with_model(doc: ExtractedDoc, missing: list) -> ExtractedDoc:
     A dropped field leaves the email short of a full set, which escalates it -
     the safe outcome. We never fall back to a guess.
     """
-    from adapters.model import ModelUnavailable, available, complete_json
+    from adapters.model import STATS, ModelUnavailable, available, complete_json
 
     if not available():
         return doc
@@ -127,13 +148,15 @@ def _fill_missing_with_model(doc: ExtractedDoc, missing: list) -> ExtractedDoc:
         if not verify_against_source(value, doc.text):
             # The model returned something that is not on the page. Discard it.
             # This is the gate doing its job, and it is why the AI cannot
-            # invent a consignee.
+            # invent a consignee. Counted, so the claim is measurable.
+            STATS.gate_rejections += 1
             continue
+        line_no, raw_line = _locate(value, doc.text)
         fields[field] = FieldValue(
             value=value,
-            raw=value,
-            line_no=0,
-            label=f"(model: {field})",
+            raw=raw_line,
+            line_no=line_no,
+            label=f"(read by model: {field})",
             decided_by="model",
         )
 

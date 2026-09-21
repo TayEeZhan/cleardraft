@@ -1,0 +1,14 @@
+BILL OF LADING
+B/L No.: OOLU8812345670
+Booking Ref: 7KLM-40227
+Vessel/Voyage: OOCL EUROPE / 118W
+Exporter Name: Borneo Fibre Trading Sdn Bhd, Port Klang, Malaysia
+Deliver To: Gulf Pulp & Paper Trading LLC, Jebel Ali, Dubai, UAE
+Also Notify: Falcon Shipping Services, Dubai, UAE
+Loading Port: Port Klang, Malaysia
+Destination Port: Jebel Ali, UAE
+No. of Units: 3 x 40'HC
+Gross Mass (kg): 71,540 KG
+HS Code: 4802.55
+Freight Terms: Freight Prepaid
+Marks & Numbers: BORNEO FIBRE / JEBEL ALI / NO MARKS

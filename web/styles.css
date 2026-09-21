@@ -349,3 +349,14 @@ a.btn { text-decoration: none; display: inline-block; }
 .tone-match .recheck-label { color: var(--match); }
 .tone-quiet .recheck-label, .tone-quiet .recheck-val { color: var(--ink-3); }
 @media (max-width: 860px) { .recheck-row { grid-template-columns: 1fr; gap: 2px; } }
+
+/* ── held-out comparison ───────────────────────────────────── */
+.cmp { border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden; }
+.cmp-row { display: grid; grid-template-columns: 1fr 130px 130px; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.cmp-row:last-child { border-bottom: 0; }
+.cmp-head { background: var(--surface-2); font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.cmp-l { font-size: 13px; color: var(--ink-2); }
+.cmp-v { font-family: var(--mono); font-size: 15px; font-variant-numeric: tabular-nums; }
+.cmp-good { color: var(--match); font-weight: 600; }
+.cmp-facts { font-size: 12.5px; color: var(--ink-2); margin-top: 12px; }
+@media (max-width: 860px) { .cmp-row { grid-template-columns: 1fr 80px 80px; } }

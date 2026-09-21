@@ -210,6 +210,32 @@ def main() -> int:
         },
     }
 
+    # Held-out evidence for the model tier, if scripts/run_challenge.py has run.
+    challenge_path = os.path.join(ROOT, "out", "challenge_report.json")
+    if os.path.exists(challenge_path):
+        ch = json.load(open(challenge_path, encoding="utf-8"))
+        e = ch["emails"]
+        payload["stats"]["challenge"] = {
+            "model": ch["model"],
+            "emails": e["n"],
+            "category_accuracy": e["category_accuracy"],
+            "intent_accuracy": e["intent_accuracy"],
+            "decided_by_model": e["decided_by_model"],
+            "rescued_by_model": e["rescued_by_model"],
+            "model_wrong": e["model_wrong"],
+            "doc_pairs": [{
+                "pair": p["pair"],
+                "fields_rules": p["rules_only"]["fields_found"]["si"] + p["rules_only"]["fields_found"]["bl"],
+                "fields_model": p["with_model"]["fields_found"]["si"] + p["with_model"]["fields_found"]["bl"],
+                "fields_present": p["with_model"]["fields_present"]["si"] + p["with_model"]["fields_present"]["bl"],
+                "defects_found": p["with_model"]["defects"],
+                "defects_gold": p["gold_defects"],
+            } for p in ch["docs"]["pairs"]],
+            "calls": ch["model_stats"]["calls"],
+            "tokens": ch["model_stats"]["input_tokens"] + ch["model_stats"]["output_tokens"],
+            "gate_rejections": ch["model_stats"]["gate_rejections"],
+        }
+
     out = os.path.join(ROOT, "web", "public", "data.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:

@@ -1,0 +1,65 @@
+{
+  "pair1": {
+    "si": {
+      "shipper": "Straits Pulp & Paper Sdn Bhd, Port Klang, Malaysia",
+      "consignee": "Al Waha Paper Trading FZE, Jebel Ali, Dubai, UAE",
+      "notify_party": "Gulf Shipping Agencies LLC, Dubai, UAE",
+      "port_of_loading": "Port Klang, Malaysia",
+      "port_of_discharge": "Jebel Ali, UAE",
+      "container_count": "2 x 40'HC",
+      "gross_weight_kg": "48,320 KG"
+    },
+    "bl": {
+      "shipper": "Straits Pulp & Paper Sdn Bhd, Port Klang, Malaysia",
+      "consignee": "Al Waha Paper Trading FZE, Jebel Ali, Dubai, UAE",
+      "notify_party": "Gulf Shipping Agencies LLC, Dubai, UAE",
+      "port_of_loading": "Port Klang, Malaysia",
+      "port_of_discharge": "Jebel Ali, UAE",
+      "container_count": "2 x 40'HC",
+      "gross_weight_kg": "48,320 KG"
+    },
+    "defect_fields": []
+  },
+  "pair2": {
+    "si": {
+      "shipper": "Cedar Pulp Industries Sdn Bhd, Pasir Gudang, Malaysia",
+      "consignee": "KL Paper Converters LLC, Dubai, UAE",
+      "notify_party": "Emirates Cargo Services, Dubai, UAE",
+      "port_of_loading": "Pasir Gudang, Malaysia",
+      "port_of_discharge": "Port Rashid, Dubai, UAE",
+      "container_count": "5 x 20'GP",
+      "gross_weight_kg": "64,210 KG"
+    },
+    "bl": {
+      "shipper": "Cedar Pulp Industries Sdn Bhd, Pasir Gudang, Malaysia",
+      "consignee": "KL Paper Trading FZCO, Dubai, UAE",
+      "notify_party": "Emirates Cargo Services, Dubai, UAE",
+      "port_of_loading": "Pasir Gudang, Malaysia",
+      "port_of_discharge": "Port Rashid, Dubai, UAE",
+      "container_count": "4 x 20'GP",
+      "gross_weight_kg": "64,210 KG"
+    },
+    "defect_fields": ["consignee", "container_count"]
+  },
+  "pair3": {
+    "si": {
+      "shipper": "Borneo Fibre Trading Sdn Bhd, Port Klang, Malaysia",
+      "consignee": "Gulf Pulp & Paper Trading LLC, Jebel Ali, Dubai, UAE",
+      "notify_party": null,
+      "port_of_loading": "Port Klang, Malaysia",
+      "port_of_discharge": "Jebel Ali, UAE",
+      "container_count": "3 x 40'HC",
+      "gross_weight_kg": "71,540 KG"
+    },
+    "bl": {
+      "shipper": "Borneo Fibre Trading Sdn Bhd, Port Klang, Malaysia",
+      "consignee": "Gulf Pulp & Paper Trading LLC, Jebel Ali, Dubai, UAE",
+      "notify_party": "Falcon Shipping Services, Dubai, UAE",
+      "port_of_loading": "Port Klang, Malaysia",
+      "port_of_discharge": "Jebel Ali, UAE",
+      "container_count": "3 x 40'HC",
+      "gross_weight_kg": "71,540 KG"
+    },
+    "defect_fields": []
+  }
+}

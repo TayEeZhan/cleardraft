@@ -358,6 +358,8 @@ function renderAccuracy() {
   p3.append(bars(s.escalations));
   host.append(p3);
 
+  if (s.challenge) host.append(challengePanel(s.challenge));
+
   const note = el("div", "note");
   note.innerHTML = `<b>How to read these numbers.</b> They are measured on every run against the
     sample inbox, not typed in. The model is a fallback: it is asked only for a field the
@@ -365,6 +367,43 @@ function renderAccuracy() {
     document or it is thrown away. On this run it was consulted
     <b>${s.model.calls} time${s.model.calls === 1 ? "" : "s"}</b>.`;
   host.append(note);
+}
+
+/* The sample inbox is fully covered by rules, so it cannot show what the model
+   adds. This panel reports a held-out set written without reference to our
+   rules, run twice: rules alone, then rules with the model as fallback. */
+function challengePanel(c) {
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const p = el("div", "panel");
+  p.append(el("h3", null, "On mail it has never seen"));
+  p.append(el("div", "sub", `${c.emails} held-out emails and ${c.doc_pairs.length} document pairs, written without reference to our rules. Each run twice.`));
+
+  const t = el("div", "cmp");
+  const head = el("div", "cmp-row cmp-head");
+  for (const h of ["", "Rules only", "Rules + model"]) head.append(el("div", null, h));
+  t.append(head);
+  const rows = [
+    ["Email sorted correctly", pct(c.category_accuracy.rules_only), pct(c.category_accuracy.with_model)],
+    ["Request understood (intent)", pct(c.intent_accuracy.rules_only), pct(c.intent_accuracy.with_model)],
+  ];
+  const fr = c.doc_pairs.reduce((a, d) => a + d.fields_rules, 0);
+  const fm = c.doc_pairs.reduce((a, d) => a + d.fields_model, 0);
+  const fp = c.doc_pairs.reduce((a, d) => a + d.fields_present, 0);
+  rows.push(["Fields read, unfamiliar labels", `${fr} of ${fp}`, `${fm} of ${fp}`]);
+  for (const r of rows) {
+    const row = el("div", "cmp-row");
+    row.append(el("div", "cmp-l", r[0]), el("div", "cmp-v", r[1]), el("div", "cmp-v cmp-good", r[2]));
+    t.append(row);
+  }
+  p.append(t);
+
+  const facts = el("div", "cmp-facts");
+  facts.textContent =
+    `The model decided ${c.decided_by_model} emails and got ${c.model_wrong} wrong. ` +
+    `It was asked only what the rules could not answer: ${c.calls} calls, ${c.tokens.toLocaleString()} tokens in total. ` +
+    `Answers not found word for word in the document are discarded; ${c.gate_rejections} were discarded this run.`;
+  p.append(facts);
+  return p;
 }
 
 function route() {
