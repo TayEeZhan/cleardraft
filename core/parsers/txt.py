@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from core import aliases
 from core.parsers import detect_kind, register
+from core.parsers.labels import match_label_prefix
 from core.types import CompareField, DocKind, ExtractedDoc, FieldValue
 
 #: Keyword test for the document heading. Shared with xlsx.py (imported from
@@ -62,22 +63,49 @@ class TxtParser:
                 if line[:1].isspace():
                     # Indented continuation line: an address wrapped onto the
                     # next line. Both SI and BL carry these, but appending
-                    # them is only safe if every renderer wraps identically -
-                    # the moment one differs it manufactures a false
-                    # shipper/consignee mismatch. Take the label line only.
-                    continue
-                if ":" not in line:
+                    # them to a value that already has one is only safe if
+                    # every renderer wraps identically - the moment one
+                    # differs it manufactures a false shipper/consignee
+                    # mismatch. Skipped here; the ONE case where a
+                    # continuation line is read is handled below, where the
+                    # label row carries no text at all.
                     continue
 
-                label, _, value = line.partition(":")
-                label = label.strip()
-                value = value.strip()
+                if ":" in line:
+                    label, _, value = line.partition(":")
+                    label = label.strip()
+                    value = value.strip()
+                    field = aliases.field_for_label(label)
+                else:
+                    # Some documents align labels into columns instead of
+                    # using a colon: "Shipper      APRIL FAR EAST (M) SDN BHD".
+                    match = match_label_prefix(line.strip())
+                    if match is None:
+                        continue
+                    field, label, value = match
 
-                field = aliases.field_for_label(label)
                 if field is None or field in fields:
                     # Unknown label, or the field is already captured - keep
                     # the FIRST occurrence, not the last.
                     continue
+
+                raw, value_line = line, i
+
+                if value == "":
+                    # The row exists but carries NO text at all, which is how
+                    # a document that puts the party block beneath its label
+                    # renders. Take the first continuation line - the name -
+                    # and never the whole address block, because appending
+                    # addresses asymmetrically invents mismatches.
+                    #
+                    # A blank TOKEN ("???", "TBA") is deliberately excluded:
+                    # that means the sender left the field empty on purpose
+                    # and must stay blank so the email escalates as
+                    # missing_value. `value == ""` is tested before is_blank()
+                    # for exactly that reason.
+                    nxt = lines[i] if i < len(lines) else ""
+                    if nxt[:1].isspace() and nxt.strip():
+                        value, raw, value_line = nxt.strip(), nxt, i + 1
 
                 # A blank token ("???", "TBA", ...) means the row exists but
                 # was left empty. Store it as "", never omit the field: a
@@ -87,8 +115,8 @@ class TxtParser:
 
                 fields[field] = FieldValue(
                     value=stored_value,
-                    raw=line,
-                    line_no=i,
+                    raw=raw,
+                    line_no=value_line,
                     label=label,
                     decided_by="rule",
                 )

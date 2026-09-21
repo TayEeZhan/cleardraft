@@ -45,6 +45,7 @@ import pdfplumber
 
 from core import aliases
 from core.parsers import detect_kind, register
+from core.parsers.labels import match_label_prefix
 from core.types import CompareField, ExtractedDoc, FieldValue
 
 #: Below this many characters of total extracted text, treat the PDF as an
@@ -68,35 +69,25 @@ _GLUED_PAREN = re.compile(r"(?<=[A-Za-z])nn(?=\()")
 
 
 def _match_known_prefix(line: str) -> "tuple[CompareField, str, str] | None":
-    """The longest alias in aliases.ORDERED that `line` starts with.
+    """The shared prefix match, plus the PDF-only interleaving check.
 
-    Requires the match to be followed by a space or a colon, so "POL" does
-    not swallow a line that merely starts with those letters, and so a
-    shorter alias never wins over a longer one that also matches (ORDERED is
-    longest-first, and the first hit wins).
+    The matching itself lives in core.parsers.labels so txt.py can use it
+    without importing this module (and therefore pdfplumber). Only the glyph
+    interleaving below is specific to PDF text extraction.
     """
-    for alias in aliases.ORDERED:
-        n = len(alias)
-        if len(line) <= n:
-            continue
-        if line[:n].casefold() != alias:
-            continue
-        if line[n] not in (" ", ":"):
-            continue
-        field = aliases.field_for_label(alias)
-        if field is None:
-            continue
-        label_text = line[:n]
-        value_text = line[n:].lstrip(" :").strip()
-        if _looks_interleaved(alias, value_text):
-            # The label overflowed into the value column and the extractor
-            # interleaved the glyphs. Returning "" marks the field blank, so
-            # compare() calls the row undecidable instead of comparing
-            # nonsense. Reporting a garbled string as a real value is how a
-            # clerk gets told a correct Bill of Lading is wrong.
-            return field, label_text, ""
-        return field, label_text, value_text
-    return None
+    match = match_label_prefix(line)
+    if match is None:
+        return None
+
+    field, label_text, value_text = match
+    if _looks_interleaved(label_text.casefold(), value_text):
+        # The label overflowed into the value column and the extractor
+        # interleaved the glyphs. Returning "" marks the field blank, so
+        # compare() calls the row undecidable instead of comparing nonsense.
+        # Reporting a garbled string as a real value is how a clerk gets told
+        # a correct Bill of Lading is wrong.
+        return field, label_text, ""
+    return field, label_text, value_text
 
 
 #: How many characters of the label remainder must reappear at the start of
