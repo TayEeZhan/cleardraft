@@ -45,6 +45,7 @@ import pdfplumber
 
 from core import aliases
 from core.parsers import detect_kind, register
+from core.parsers.labels import match_label_prefix
 from core.types import CompareField, ExtractedDoc, FieldValue
 
 #: Below this many characters of total extracted text, treat the PDF as an
@@ -68,35 +69,25 @@ _GLUED_PAREN = re.compile(r"(?<=[A-Za-z])nn(?=\()")
 
 
 def _match_known_prefix(line: str) -> "tuple[CompareField, str, str] | None":
-    """The longest alias in aliases.ORDERED that `line` starts with.
+    """The shared prefix match, plus the PDF-only interleaving check.
 
-    Requires the match to be followed by a space or a colon, so "POL" does
-    not swallow a line that merely starts with those letters, and so a
-    shorter alias never wins over a longer one that also matches (ORDERED is
-    longest-first, and the first hit wins).
+    The matching itself lives in core.parsers.labels so txt.py can use it
+    without importing this module (and therefore pdfplumber). Only the glyph
+    interleaving below is specific to PDF text extraction.
     """
-    for alias in aliases.ORDERED:
-        n = len(alias)
-        if len(line) <= n:
-            continue
-        if line[:n].casefold() != alias:
-            continue
-        if line[n] not in (" ", ":"):
-            continue
-        field = aliases.field_for_label(alias)
-        if field is None:
-            continue
-        label_text = line[:n]
-        value_text = line[n:].lstrip(" :").strip()
-        if _looks_interleaved(alias, value_text):
-            # The label overflowed into the value column and the extractor
-            # interleaved the glyphs. Returning "" marks the field blank, so
-            # compare() calls the row undecidable instead of comparing
-            # nonsense. Reporting a garbled string as a real value is how a
-            # clerk gets told a correct Bill of Lading is wrong.
-            return field, label_text, ""
-        return field, label_text, value_text
-    return None
+    match = match_label_prefix(line)
+    if match is None:
+        return None
+
+    field, label_text, value_text = match
+    if _looks_interleaved(label_text.casefold(), value_text):
+        # The label overflowed into the value column and the extractor
+        # interleaved the glyphs. Returning "" marks the field blank, so
+        # compare() calls the row undecidable instead of comparing nonsense.
+        # Reporting a garbled string as a real value is how a clerk gets told
+        # a correct Bill of Lading is wrong.
+        return field, label_text, ""
+    return field, label_text, value_text
 
 
 #: How many characters of the label remainder must reappear at the start of
@@ -138,6 +129,101 @@ def _looks_interleaved(matched_alias: str, value: str) -> bool:
         ):
             return True
     return False
+
+
+#: Shortest alias allowed to END a value (i.e. to be treated as the start of
+#: the next box on the same physical line). Six excludes "pol", "pod" and
+#: "g.w.", which are short enough to appear inside a real value and would cut
+#: it in half. A missed second box costs one escalation; a truncated first
+#: value is a wrong answer that compare() trusts.
+_MIN_SPLIT_ALIAS = 6
+
+_WORD_START = re.compile(r"(?:^|(?<=\s))(\S+)")
+
+
+def _split_candidates() -> dict[str, tuple[str, ...]]:
+    """Aliases long enough to split a line, bucketed by their first word.
+
+    Bucketing keeps the scan cheap: a word is only tested against the handful
+    of aliases that begin with it, not against all of them.
+    """
+    buckets: dict[str, list[str]] = {}
+    for alias in aliases.ORDERED:  # already longest-first
+        if len(alias) < _MIN_SPLIT_ALIAS:
+            continue
+        buckets.setdefault(alias.split(" ", 1)[0], []).append(alias)
+    return {word: tuple(found) for word, found in buckets.items()}
+
+
+_SPLIT_ALIASES = _split_candidates()
+
+
+def _find_column_break(value: str, already: CompareField) -> "int | None":
+    """Index in `value` where a DIFFERENT field's label starts, or None.
+
+    Real Bills of Lading print Shipper and Consignee in side-by-side boxes,
+    and a text extractor emits both boxes on ONE physical line:
+
+        Shipper ABC PAPER LTD Consignee XYZ TRADING LLC
+
+    Taking the whole remainder as the shipper stores
+    "ABC PAPER LTD Consignee XYZ TRADING LLC" - a value that is wrong rather
+    than missing, and compare() trusts it completely. The generator's own PDFs
+    are single-column, so nothing in the provided corpus exercises this; real
+    carrier drafts do.
+    """
+    for match in _WORD_START.finditer(value):
+        word = match.group(1).casefold().rstrip(":")
+        for alias in _SPLIT_ALIASES.get(word, ()):
+            end = match.start() + len(alias)
+            if value[match.start():end].casefold() != alias:
+                continue
+            # Must be followed by a separator, or be the end of the line.
+            if end < len(value) and value[end] not in (" ", ":"):
+                continue
+            field = aliases.field_for_label(alias)
+            if field is None or field == already:
+                continue
+            return match.start()
+    return None
+
+
+#: A physical line holds a handful of boxes at most. The bound stops a
+#: pathological line from looping.
+_MAX_BOXES_PER_LINE = 4
+
+
+def _extract_fields(line: str) -> "list[tuple[CompareField, str, str]]":
+    """Every field on one physical line, left to right.
+
+    One box per line is the common case and returns a single entry. A line
+    holding two boxes returns both, with the first value cut at the second
+    box's label instead of swallowing it.
+    """
+    out: list[tuple[CompareField, str, str]] = []
+    rest = line.strip()
+    seen: set[CompareField] = set()
+
+    for _ in range(_MAX_BOXES_PER_LINE):
+        match = _extract_field(rest)
+        if match is None:
+            break
+        field, label, value = match
+
+        cut = _find_column_break(value, field)
+        if cut is None:
+            rest = ""
+        else:
+            rest = value[cut:]
+            value = value[:cut].strip()
+
+        if field not in seen:
+            seen.add(field)
+            out.append((field, label, value))
+        if not rest:
+            break
+
+    return out
 
 
 def _extract_field(line: str) -> "tuple[CompareField, str, str] | None":
@@ -198,23 +284,21 @@ class PdfParser:
 
             fields: dict[CompareField, FieldValue] = {}
             for i, line in enumerate(lines, start=1):
-                match = _extract_field(line)
-                if match is None:
-                    continue
-                field, label, value = match
-                if field in fields:
-                    # Keep the FIRST occurrence, not the last.
-                    continue
+                # One physical line can carry two side-by-side boxes.
+                for field, label, value in _extract_fields(line):
+                    if field in fields:
+                        # Keep the FIRST occurrence, not the last.
+                        continue
 
-                stored_value = "" if aliases.is_blank(value) else value
+                    stored_value = "" if aliases.is_blank(value) else value
 
-                fields[field] = FieldValue(
-                    value=stored_value,
-                    raw=line.strip(),
-                    line_no=i,
-                    label=label,
-                    decided_by="rule",
-                )
+                    fields[field] = FieldValue(
+                        value=stored_value,
+                        raw=line.strip(),
+                        line_no=i,
+                        label=label,
+                        decided_by="rule",
+                    )
 
             return ExtractedDoc(path=path, kind=kind, fields=fields, text=text, readable=True)
         except Exception as exc:
