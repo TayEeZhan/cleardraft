@@ -214,6 +214,8 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 .chip-review   { background: var(--review-bg);   color: var(--review); }
 .chip-match    { background: var(--match-bg);    color: var(--match); }
 .chip-quiet    { background: var(--surface-2);   color: var(--ink-3); }
+.chip-confirmed { background: var(--match-bg);    color: var(--match); }
+.chip-flagged   { background: var(--mismatch-bg); color: var(--mismatch); }
 
 .empty { padding: 48px 16px; text-align: center; color: var(--ink-3); background: var(--surface); }
 
@@ -222,7 +224,9 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 .back::before { content: "\2190"; margin-right: 6px; }
 
 .case-head { margin-bottom: 8px; }
-.print-btn { display: inline-flex; align-items: center; min-height: 44px; margin: 0 0 14px; }
+.case-actions { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 0 0 14px; }
+.print-btn { display: inline-flex; align-items: center; min-height: 44px; margin: 0; }
+.case-csv-btn { display: inline-flex; align-items: center; min-height: 44px; margin: 0; }
 .print-only { display: none; }
 .case-head .ref { font-family: var(--mono); font-size: 13px; color: var(--marine); font-weight: 500; }
 .case-head h1 { font-size: 21px; margin: 4px 0 8px; }
@@ -317,6 +321,8 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
   text-align: left;
 }
 .proof-btn:hover { color: var(--ink); }
+/* Same look, 44px tap area: padding grows the target, negative margin keeps the row height. */
+.proof-btn { padding-top: 15px; padding-bottom: 15px; margin-top: -10px; margin-bottom: -15px; }
 .proof {
   padding: 0 14px 12px 148px;
   background: var(--surface-2); border-top: 1px dashed var(--rule);
@@ -592,6 +598,22 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .mine-actions .btn { min-height: 44px; }
 .mine-actions .link-btn { display: inline-flex; align-items: center; min-height: 44px; }
 
+/* ── Export menu ────────────────────────────────────────────── */
+.export-wrap { position: relative; }
+.export-wrap .btn { min-height: 44px; }
+.export-menu {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 30;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r);
+  box-shadow: var(--shadow); min-width: 230px; padding: 6px;
+}
+.export-menu[hidden] { display: none; }
+.export-menu-item {
+  display: block; width: 100%; text-align: left; font-family: inherit; font-size: 13.5px;
+  color: var(--ink); background: none; border: 0; border-radius: 4px; padding: 10px;
+  min-height: 44px; cursor: pointer;
+}
+.export-menu-item:hover { background: var(--surface-2); }
+
 #view-board.drag-over #board-normal,
 #view-board.drag-over #addmail-panel { outline: 2px dashed var(--marine); outline-offset: 6px; border-radius: var(--r); }
 
@@ -716,6 +738,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 
   .topbar, .skip, .nav, .back, .tabs, .search-field, #toast, .account,
   #check-form, button, .btn, .link-btn, .proof-btn, .done-bar,
+  .export-wrap, .case-actions, .review-flag-form,
   #view-home, #view-board, #view-account { display: none !important; }
 
   .reply-textarea {
@@ -780,3 +803,32 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   .done-bar { flex-direction: column; align-items: stretch; }
   .done-bar-actions { justify-content: space-between; }
 }
+
+/* ── Review status + "Something's wrong" flag form ─────────────── */
+.review-status { font-size: 13.5px; color: var(--ink); }
+.review-status-note { color: var(--ink-2); }
+.review-flag-form {
+  flex: 1 1 100%; display: flex; flex-direction: column; gap: 10px;
+  margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--rule);
+}
+.review-flag-form[hidden] { display: none; }
+.review-flag-textarea { width: 100%; box-sizing: border-box; min-height: 72px; }
+.review-flag-form .btn { align-self: flex-start; }
+
+/* ── "ClearDraft did / Your part" panel ─────────────────────────── */
+.your-part-panel {
+  background: var(--surface-2); border: 1px solid var(--rule); border-radius: var(--r);
+  padding: 12px 16px; margin: 0 0 22px; font-size: 13px; color: var(--ink-2);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.your-part-did { color: var(--ink-2); }
+.your-part-yours { color: var(--ink); font-weight: 500; }
+
+/* ── "To the order of" note ──────────────────────────────────────── */
+.order-note { margin: -14px 0 24px; }
+
+/* ── Accuracy: your reviews panel ────────────────────────────────── */
+.reviews-agreement { font-size: 14px; font-weight: 600; color: var(--ink); margin-top: 6px; }
+.reviews-flagged-list { margin: 12px 0 0; padding-left: 18px; }
+.reviews-flagged-list li { font-size: 13px; color: var(--ink-2); margin-bottom: 5px; }
+.reviews-flagged-list a { color: var(--marine); font-weight: 500; text-decoration: underline; text-underline-offset: 2px; }

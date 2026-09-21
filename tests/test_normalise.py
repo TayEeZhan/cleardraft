@@ -37,6 +37,26 @@ def test_distinct_entities_do_not_collapse() -> None:
     assert normalise_entity("MOORIM SP CO., LTD") != normalise_entity("UAB NOVAKOPA")
 
 
+def test_entity_continuation_marker_is_formatting_not_content() -> None:
+    # Workshop finding: a trailing/wrapping "*" or "**" marks a party name
+    # that continues elsewhere on the page - not a discrepancy.
+    assert normalise_entity("EAST BRIGHT FZ-LLC *") == normalise_entity(
+        "EAST BRIGHT FZ-LLC"
+    )
+    assert normalise_entity("**UAB NOVAKOPA**") == normalise_entity("UAB NOVAKOPA")
+    assert normalise_entity("MOORIM SP CO., LTD *") == normalise_entity(
+        "MOORIM SP CO LTD"
+    )
+
+
+def test_entity_continuation_marker_does_not_mask_real_defects() -> None:
+    assert normalise_entity("UAB NOVAKOPA *") != normalise_entity("EAST BRIGHT FZ-LLC")
+
+
+def test_entity_extra_spacing_is_formatting_not_content() -> None:
+    assert normalise_entity("KTP  CO.,   LTD") == normalise_entity("KTP CO., LTD")
+
+
 def test_blank_required_values_are_undecidable() -> None:
     for token in ("", "???", "_______", "TBA", "TBC", "N/A"):
         assert normalise("shipper", token) is None

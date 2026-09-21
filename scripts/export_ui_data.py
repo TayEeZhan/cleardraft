@@ -41,6 +41,14 @@ AMENDMENTS: dict = (
 )
 
 
+def _rel(path: str) -> str:
+    """Path relative to data/, forward slashes. The snapshot is published, so
+    it must never carry the absolute path of the machine that built it."""
+    if not path:
+        return ""
+    return os.path.relpath(path, os.path.join(ROOT, "data")).replace(os.sep, "/")
+
+
 def _fv(field_value, source: str) -> "dict | None":
     if field_value is None:
         return None
@@ -58,7 +66,7 @@ def _doc(doc) -> "dict | None":
     if doc is None:
         return None
     return {
-        "path": doc.path,
+        "path": _rel(doc.path),
         "kind": doc.kind,
         "readable": doc.readable,
         "error": doc.error,
@@ -125,8 +133,8 @@ def main() -> int:
                 "label": FIELD_LABELS.get(c.field, c.field),
                 "matched": c.matched,
                 "undecidable": c.undecidable,
-                "si": _fv(c.si, si.path if si else ""),
-                "bl": _fv(c.bl, bl.path if bl else ""),
+                "si": _fv(c.si, _rel(si.path) if si else ""),
+                "bl": _fv(c.bl, _rel(bl.path) if bl else ""),
             })
 
         recheck_block = None
@@ -157,6 +165,7 @@ def main() -> int:
             "category": decision.category,
             "intent": classification.intent,
             "evidence": classification.evidence,
+            "confidence": classification.confidence,
             "status": decision.status,
             "review_reason": decision.review_reason,
             "rationale": decision.rationale,

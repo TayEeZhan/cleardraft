@@ -25,7 +25,15 @@ from core.types import CompareField
 #: entity punctuation that varies across renderers but never carries meaning:
 #: "MOORIM SP CO., LTD" vs "MOORIM SP CO LTD". Strip it everywhere, not just
 #: at the end, since it can appear mid-string before a suffix like "LTD".
+#: Does NOT include "*" - that is a continuation marker, not punctuation, and
+#: is stripped separately by _ENTITY_CONTINUATION below.
 _ENTITY_PUNCT = re.compile(r"[.,]")
+#: Workshop finding: real shipping documents often truncate a party name with
+#: a "*" or "**" continuation marker (the text continues elsewhere on the
+#: page). A run of asterisks anywhere in the name - trailing, leading, or
+#: wrapping it - is formatting noise from that truncation, never content, so
+#: it is stripped before comparison like the entity punctuation above.
+_ENTITY_CONTINUATION = re.compile(r"\*+")
 #: Where a company name ends and its postal address begins. The renderers
 #: disagree on the separator, so all of them are cut here.
 _ENTITY_TAIL = re.compile(r"\s*[|\n\r]\s*")
@@ -89,9 +97,12 @@ def normalise(field: CompareField, value: str) -> "str | int | None":
 def normalise_entity(value: str) -> str:
     """shipper / consignee / notify_party.
 
-    Uppercase, collapse whitespace, drop trailing punctuation. Keep the full
-    legal name: "MOORIM SP CO., LTD" and "MOORIM SP CO LTD" must match, but
-    "MOORIM SP" and "UAB NOVAKOPA" must not.
+    Uppercase, collapse whitespace, drop trailing punctuation, and drop "*"
+    continuation markers ("EAST BRIGHT FZ-LLC *", "**UAB NOVAKOPA**") - a
+    workshop finding that these mark a party name continuing elsewhere on the
+    page, not a discrepancy. Keep the full legal name: "MOORIM SP CO., LTD"
+    and "MOORIM SP CO LTD" must match, but "MOORIM SP" and "UAB NOVAKOPA"
+    must not.
     """
     text = _as_text(value)
     if text is None:
@@ -108,6 +119,7 @@ def normalise_entity(value: str) -> str:
     s = _ENTITY_TAIL.split(text, 1)[0]
     s = s.upper()
     s = _ENTITY_PUNCT.sub("", s)
+    s = _ENTITY_CONTINUATION.sub("", s)
     s = _WHITESPACE.sub(" ", s).strip()
     return s
 

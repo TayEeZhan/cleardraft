@@ -404,6 +404,7 @@ def _process_eml_bytes(data: bytes, upload_name: str) -> "dict | JSONResponse":
             "category": decision.category,
             "intent": classification.intent,
             "evidence": classification.evidence,
+            "confidence": classification.confidence,
             "status": decision.status,
             "review_reason": decision.review_reason,
             "rationale": decision.rationale,

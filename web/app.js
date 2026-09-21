@@ -35,29 +35,60 @@ let ADDMAIL_OPEN = false;    // populated "Your mail": is the add-mail panel ope
    what was typed. */
 const EDITS = new Map();
 
-/* Which cases a clerk has marked done. Persisted per-browser only — every
-   access is try/caught, same pattern as loadMine()/saveMine(). */
-function loadDone() {
+/* Human review of a case: whether a clerk confirmed ClearDraft's answer,
+   flagged it as wrong (with a note), or — from the old "Done" feature —
+   just marked it done. Persisted per-browser only, keyed by email_id;
+   every access is try/caught, same pattern as loadMine()/saveMine(). */
+function loadReviews() {
   try {
-    const raw = localStorage.getItem("cleardraft.done.v1");
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    if (Array.isArray(arr)) return new Set(arr);
+    const raw = localStorage.getItem("cleardraft.reviews.v1");
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj;
   } catch { /* corrupt or inaccessible storage — start empty */ }
-  return new Set();
+  return {};
 }
-let DONE = loadDone();
+let REVIEWS = loadReviews();
+
+function saveReviews() {
+  try { localStorage.setItem("cleardraft.reviews.v1", JSON.stringify(REVIEWS)); } catch { /* per-browser convenience only */ }
+}
+
+/* One-time migration from the old "Done" list: every id there becomes a
+   review with verdict "done", then the old key is removed so this only
+   ever runs once. */
+function migrateDoneList() {
+  let raw;
+  try { raw = localStorage.getItem("cleardraft.done.v1"); } catch { return; }
+  if (!raw) return;
+  try {
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) {
+      let changed = false;
+      for (const id of arr) {
+        if (!REVIEWS[id]) { REVIEWS[id] = { verdict: "done", note: "", at: new Date().toISOString() }; changed = true; }
+      }
+      if (changed) saveReviews();
+    }
+  } catch { /* corrupt old list — nothing to migrate */ }
+  try { localStorage.removeItem("cleardraft.done.v1"); } catch { /* best effort */ }
+}
+migrateDoneList();
+
 /* Set by navigateToCase() right before it changes the hash; consumed once
    by whichever renderReview() call turns out to be the render that sticks
    (see navigateToCase() below for why that can't just be a direct focus() call). */
 let FOCUS_CASE_HEADING = false;
-function saveDone() {
-  try { localStorage.setItem("cleardraft.done.v1", JSON.stringify([...DONE])); } catch { /* per-browser convenience only */ }
+
+function getReview(id) { return REVIEWS[id] || null; }
+function isReviewed(id) { return Boolean(REVIEWS[id]); }
+function setReview(id, verdict, note) {
+  REVIEWS[id] = { verdict, note: note || "", at: new Date().toISOString() };
+  saveReviews();
 }
-function isDone(id) { return DONE.has(id); }
-function setDone(id, val) {
-  if (val) DONE.add(id); else DONE.delete(id);
-  saveDone();
+function clearReview(id) {
+  delete REVIEWS[id];
+  saveReviews();
 }
 
 const TAB_LABELS = {
@@ -146,14 +177,19 @@ function renderBoard() {
 
   for (const r of rows.slice(0, 200)) {
     const a = el("a", "case");
-    if (isDone(r.email_id)) a.classList.add("case-done");
+    if (isReviewed(r.email_id)) a.classList.add("case-done");
     a.href = `#/case/${r.email_id}`;
     a.setAttribute("role", "listitem");
     a.append(el("div", "case-ref", r.reference));
     a.append(el("div", "case-subject", r.subject));
 
     const tags = el("div", "case-fields");
-    if (isDone(r.email_id)) tags.append(el("span", "chip chip-done", "Done"));
+    const rowReview = getReview(r.email_id);
+    if (rowReview) {
+      const chipCls = rowReview.verdict === "confirmed" ? "chip-confirmed" : rowReview.verdict === "flagged" ? "chip-flagged" : "chip-done";
+      const chipTxt = rowReview.verdict === "confirmed" ? "Confirmed" : rowReview.verdict === "flagged" ? "Flagged" : "Done";
+      tags.append(el("span", `chip ${chipCls}`, chipTxt));
+    }
     if (r.status === "MISMATCH") {
       for (const f of r.defect_fields) tags.append(el("span", "chip chip-mismatch", f.replace(/_/g, " ")));
     } else if (r.status === "NEEDS_REVIEW") {
@@ -246,7 +282,7 @@ function verdictKind(d) {
   return d.status === "MISMATCH" ? "mismatch" : d.status === "NEEDS_REVIEW" ? "review" : "match";
 }
 
-function renderVerdict(d, host, { reply = true } = {}) {
+function renderVerdict(d, host, { reply = true, afterVerdict = null } = {}) {
   const kind = verdictKind(d);
   const icon = { mismatch: "≠", review: "?", match: "✓" }[kind];
   const n = d.defect_fields.length;
@@ -264,8 +300,38 @@ function renderVerdict(d, host, { reply = true } = {}) {
   v.append(vt);
   host.append(v);
 
-  if (d.comparisons.length) host.append(seamTable(d));
+  if (afterVerdict) host.append(afterVerdict);
+
+  if (d.comparisons.length) {
+    host.append(seamTable(d));
+    const note = orderOfNote(d);
+    if (note) host.append(note);
+  }
   if (reply) host.append(replyCard(d, d.reply_draft, "Reply, ready to send", null));
+}
+
+/* "To the order of" vs a plain named consignee: legally, a BL naming a
+   party "to the order of" is negotiable, a BL naming the same party
+   directly is not. The comparison fields still match (same company), so
+   the verdict never changes — this is informational only. */
+function orderOfNote(d) {
+  for (const c of d.comparisons) {
+    const siLabel = c.si && c.si.label;
+    const blLabel = c.bl && c.bl.label;
+    const siOrder = Boolean(siLabel && /order/i.test(siLabel));
+    const blOrder = Boolean(blLabel && /order/i.test(blLabel));
+    if (siOrder && !blOrder) return orderOfNoteEl("SI", "BL");
+    if (blOrder && !siOrder) return orderOfNoteEl("BL", "SI");
+  }
+  return null;
+}
+
+function orderOfNoteEl(orderSide, plainSide) {
+  const note = el("div", "note order-note");
+  note.append(document.createTextNode(
+    `The ${orderSide} names this party "To the order of" — that makes the Bill of Lading negotiable — while the ${plainSide} names a plain consignee. ClearDraft treats them as the same company, so it is not flagged. Confirm the BL type is what the shipper wants.`
+  ));
+  return note;
 }
 
 /* Prints only the view on screen; the @media print rules strip the rest.
@@ -275,6 +341,291 @@ function printButton() {
   const btn = el("button", "link-btn print-btn", "Print / save as PDF");
   btn.type = "button";
   btn.addEventListener("click", () => window.print());
+  return btn;
+}
+
+/* ── Export ─────────────────────────────────────────────────────
+   Client-side only — everything here reads from the already-loaded
+   board/detail data (mine or sample), builds rows, and triggers a
+   Blob download. No request ever leaves the browser. */
+
+function boardForSource(source) { return source === "mine" ? MINE.board : (DATA ? DATA.board : []); }
+function detailForSource(source, id) { return source === "mine" ? MINE.detail[id] : (DATA && DATA.detail[id]); }
+
+const CSV_HEADERS = [
+  "email_id", "reference", "subject", "from", "category", "status", "review_reason",
+  "decided_by", "confidence", "field", "field_result", "si_value", "bl_value",
+  "si_source", "bl_source", "explanation", "human_review", "human_note", "reviewed_at",
+];
+
+/* RFC 4180: every cell quoted, internal quotes doubled, CRLF line ends.
+   Also neutralises spreadsheet formulas — uploaded mail is untrusted, so a
+   subject or value starting with =, +, -, @, tab or CR gets a leading
+   single quote before it is ever quoted for the cell. */
+function csvCell(value) {
+  let s = value == null ? "" : String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  s = s.replace(/"/g, '""');
+  return `"${s}"`;
+}
+
+function toCsv(rows) {
+  const lines = [CSV_HEADERS.map(csvCell).join(",")];
+  for (const row of rows) lines.push(CSV_HEADERS.map((h) => csvCell(row[h])).join(","));
+  return lines.join("\r\n") + "\r\n";
+}
+
+function sourceStr(fv) {
+  if (!fv || !fv.source) return "";
+  return fv.line_no ? `${fv.source} line ${fv.line_no}` : fv.source;
+}
+
+function fieldResultOf(c) {
+  if (c.undecidable) return "missing";
+  return c.matched ? "match" : "mismatch";
+}
+
+function fieldExplanation(c) {
+  if (c.undecidable) {
+    if (!c.bl || !c.bl.value) return "Not found on the draft BL";
+    if (!c.si || !c.si.value) return "Not found on the SI";
+    return "Could not be determined";
+  }
+  if (c.matched) return "All fields match";
+  const siVal = (c.si && c.si.value) || "left blank";
+  const blVal = (c.bl && c.bl.value) || "left blank";
+  return `SI says ${siVal}; draft BL says ${blVal}`;
+}
+
+function noComparisonExplanation(row) {
+  if (row.status === "NEEDS_REVIEW") return REASON[row.review_reason] || "needs a human";
+  return `Not a document check (${String(row.category || "").replace(/_/g, " ").toLowerCase()})`;
+}
+
+function reviewColumnsFor(id) {
+  const r = getReview(id);
+  if (!r) return { human_review: "", human_note: "", reviewed_at: "" };
+  return { human_review: r.verdict, human_note: r.note || "", reviewed_at: r.at || "" };
+}
+
+function baseExportRow(row, detail) {
+  const rv = reviewColumnsFor(row.email_id);
+  return {
+    email_id: row.email_id,
+    reference: row.reference,
+    subject: row.subject,
+    from: row.from,
+    category: row.category,
+    status: row.status,
+    review_reason: row.review_reason || "",
+    decided_by: row.decided_by || (detail && detail.decided_by) || "",
+    confidence: (detail && typeof detail.confidence === "number") ? Math.round(detail.confidence * 100) : "",
+    human_review: rv.human_review,
+    human_note: rv.human_note,
+    reviewed_at: rv.reviewed_at,
+  };
+}
+
+function fieldExportRow(row, detail, c) {
+  return {
+    ...baseExportRow(row, detail),
+    field: c.label,
+    field_result: fieldResultOf(c),
+    si_value: (c.si && c.si.value) || "",
+    bl_value: (c.bl && c.bl.value) || "",
+    si_source: sourceStr(c.si),
+    bl_source: sourceStr(c.bl),
+    explanation: fieldExplanation(c),
+  };
+}
+
+function noComparisonExportRow(row, detail) {
+  return {
+    ...baseExportRow(row, detail),
+    field: "", field_result: "", si_value: "", bl_value: "", si_source: "", bl_source: "",
+    explanation: noComparisonExplanation(row),
+  };
+}
+
+function buildDiscrepancyRows(source) {
+  const rows = [];
+  for (const row of boardForSource(source)) {
+    const detail = detailForSource(source, row.email_id);
+    const comparisons = (detail && detail.comparisons) || [];
+    if (comparisons.length) {
+      for (const c of comparisons) {
+        if (c.undecidable || !c.matched) rows.push(fieldExportRow(row, detail, c));
+      }
+    } else if (row.status === "NEEDS_REVIEW") {
+      rows.push(noComparisonExportRow(row, detail));
+    }
+  }
+  return rows;
+}
+
+function buildFullResultsRows(source) {
+  const rows = [];
+  for (const row of boardForSource(source)) {
+    const detail = detailForSource(source, row.email_id);
+    const comparisons = (detail && detail.comparisons) || [];
+    if (comparisons.length) {
+      for (const c of comparisons) rows.push(fieldExportRow(row, detail, c));
+    } else {
+      rows.push(noComparisonExportRow(row, detail));
+    }
+  }
+  return rows;
+}
+
+/* {category, status, review_reason, defect_fields, has_defect} in exactly
+   that key order, matching the organiser's sample_submission format. */
+function buildSubmissionJson(source) {
+  const out = {};
+  for (const row of boardForSource(source)) {
+    out[row.email_id] = {
+      category: row.category,
+      status: row.status,
+      review_reason: row.review_reason,
+      defect_fields: row.defect_fields,
+      has_defect: row.has_defect,
+    };
+  }
+  return out;
+}
+
+function todayStr() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function downloadBlob(content, mime, filename) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadCsv(rows, kindLabel) {
+  const csv = `﻿${toCsv(rows)}`;
+  downloadBlob(csv, "text/csv;charset=utf-8", `cleardraft-${SRC}-${kindLabel}-${todayStr()}.csv`);
+}
+
+function downloadJson(obj, kindLabel) {
+  const json = JSON.stringify(obj, null, 2);
+  downloadBlob(json, "application/json;charset=utf-8", `cleardraft-${SRC}-${kindLabel}-${todayStr()}.json`);
+}
+
+function closeExportMenu() {
+  const menu = $("#export-menu");
+  const btn = $("#export-btn");
+  if (menu) menu.hidden = true;
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+
+function initExportMenu() {
+  const btn = $("#export-btn");
+  const menu = $("#export-menu");
+  if (!btn || !menu) return;
+
+  btn.addEventListener("click", () => {
+    const willShow = menu.hidden;
+    menu.hidden = !willShow;
+    btn.setAttribute("aria-expanded", String(willShow));
+  });
+  document.addEventListener("click", (e) => {
+    if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) closeExportMenu();
+  });
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !menu.hidden) { closeExportMenu(); btn.focus(); }
+  });
+
+  const discBtn = $("#export-discrepancy-csv");
+  if (discBtn) discBtn.addEventListener("click", () => {
+    closeExportMenu();
+    downloadCsv(buildDiscrepancyRows(SRC), "discrepancy-report");
+    toast("Discrepancy report downloaded.");
+  });
+  const fullBtn = $("#export-full-csv");
+  if (fullBtn) fullBtn.addEventListener("click", () => {
+    closeExportMenu();
+    downloadCsv(buildFullResultsRows(SRC), "full-results");
+    toast("Full results downloaded.");
+  });
+  const subBtn = $("#export-submission-json");
+  if (subBtn) subBtn.addEventListener("click", () => {
+    closeExportMenu();
+    downloadJson(buildSubmissionJson(SRC), "submission");
+    toast("Submission file downloaded.");
+  });
+}
+
+/* "ClearDraft did / Your part" — the compact panel that shows, at a
+   glance, what the pipeline already did and what is left for a person.
+   Shared wording lives here so the case page and any future caller stay
+   in sync. */
+function joinPlain(parts) { return parts.join(", "); }
+
+function didLine(d) {
+  const parts = ["sorted the email"];
+  const hasDocs = attachmentNames(d).length > 0 || (d.documents && (d.documents.si || d.documents.bl));
+  if (d.comparisons && d.comparisons.length) {
+    if (hasDocs) parts.push("read both documents");
+    parts.push(`compared ${d.comparisons.length} field${d.comparisons.length === 1 ? "" : "s"}`);
+  }
+  if (d.reply_draft) parts.push("drafted the reply");
+  return `ClearDraft did: ${joinPlain(parts)}.`;
+}
+
+function yourPartLine(d) {
+  const kind = verdictKind(d);
+  if (kind === "mismatch") {
+    const n = d.defect_fields.length;
+    return `Your part: Check the ${n} highlighted field${n === 1 ? "" : "s"} against ${n === 1 ? "its" : "their"} source lines, then send the reply asking for an amendment.`;
+  }
+  if (kind === "review") {
+    const reason = REASON[d.review_reason] || "it was not sure";
+    return `Your part: ClearDraft did not decide this one (${reason}). Open the documents and decide yourself.`;
+  }
+  if (d.comparisons && d.comparisons.length) {
+    return `Your part: All ${d.comparisons.length} fields match. Skim the table, then send the confirmation.`;
+  }
+  const cat = d.category.replace(/_/g, " ").toLowerCase();
+  return `Your part: Not a document check (${cat}). Handle it as usual.`;
+}
+
+function yourPartPanel(d) {
+  const panel = el("div", "your-part-panel");
+  panel.append(el("div", "your-part-did", didLine(d)));
+  panel.append(el("div", "your-part-yours", yourPartLine(d)));
+  return panel;
+}
+
+/* "Download CSV" on the case page — the exact Full-results rows for just
+   this email, built with the same row-builders the inbox export uses so
+   the two never disagree. */
+function caseCsvButton(d) {
+  const btn = el("button", "link-btn case-csv-btn", "Download CSV");
+  btn.type = "button";
+  btn.addEventListener("click", () => {
+    const found = findRowById(d.email_id);
+    const boardRow = found ? found.row : {
+      email_id: d.email_id, reference: d.reference, subject: d.subject, from: d.from,
+      category: d.category, status: d.status, review_reason: d.review_reason,
+      decided_by: d.decided_by, defect_fields: d.defect_fields, has_defect: d.has_defect,
+    };
+    const comparisons = d.comparisons || [];
+    const rows = comparisons.length
+      ? comparisons.map((c) => fieldExportRow(boardRow, d, c))
+      : [noComparisonExportRow(boardRow, d)];
+    downloadCsv(rows, `case-${d.email_id}`);
+    toast("CSV downloaded.");
+  });
   return btn;
 }
 
@@ -355,7 +706,9 @@ function renderReview(id) {
   const meta = el("div", "case-meta");
   meta.append(el("span", null, d.from));
   meta.append(el("span", null, d.category.replace(/_/g, " ").toLowerCase()));
-  meta.append(el("span", null, `decided by ${d.decided_by}`));
+  let decidedText = d.decided_by === "model" ? "Decided by AI (model)" : "Decided by rule";
+  if (typeof d.confidence === "number") decidedText += ` · confidence ${Math.round(d.confidence * 100)}%`;
+  meta.append(el("span", null, decidedText));
   head.append(meta);
 
   if (d.uploaded) {
@@ -369,18 +722,22 @@ function renderReview(id) {
   }
 
   host.append(head);
-  host.append(printButton());
+  const caseActions = el("div", "case-actions");
+  caseActions.append(printButton());
+  caseActions.append(caseCsvButton(d));
+  host.append(caseActions);
   host.append(originalEmailDetails(d));
 
+  const yourPart = yourPartPanel(d);
   if (d.recheck) {
-    renderVerdict(d, host, { reply: false });
+    renderVerdict(d, host, { reply: false, afterVerdict: yourPart });
     host.append(recheckCard(d.recheck));
     host.append(replyCard(d, d.recheck.reply_draft, "Follow-up reply, ready to send", d.reply_draft));
   } else {
-    renderVerdict(d, host);
+    renderVerdict(d, host, { afterVerdict: yourPart });
   }
 
-  host.append(doneBar(d));
+  host.append(reviewBar(d));
 
   if (FOCUS_CASE_HEADING) {
     FOCUS_CASE_HEADING = false;
@@ -627,13 +984,14 @@ function getCaseListContext(id) {
   return { source, tab: ownTab, query: "", list: computeFilteredList(source, ownTab, "") };
 }
 
-/* The next row, in list order, that is not done — wrapping around once.
-   Returns -1 when every other row (and the current one) is already done. */
-function nextUndoneIndex(list, fromIdx) {
+/* The next row, in list order, that has not been reviewed — wrapping
+   around once. Returns -1 when every other row (and the current one) is
+   already reviewed. */
+function nextUnreviewedIndex(list, fromIdx) {
   const n = list.length;
   for (let step = 1; step <= n; step++) {
     const idx = (fromIdx + step) % n;
-    if (!isDone(list[idx].email_id)) return idx;
+    if (!isReviewed(list[idx].email_id)) return idx;
   }
   return -1;
 }
@@ -674,53 +1032,130 @@ function advanceCase(id, context, { requireUndone }) {
     navigateToCase(list[(idx + 1) % list.length].email_id);
     return;
   }
-  const nextIdx = nextUndoneIndex(list, idx);
-  if (nextIdx === -1) { goToBoardTab(source, tab, query, `All done in ${TAB_LABELS[tab]}.`); return; }
+  const nextIdx = nextUnreviewedIndex(list, idx);
+  if (nextIdx === -1) { goToBoardTab(source, tab, query, `All reviewed in ${TAB_LABELS[tab]}.`); return; }
   navigateToCase(list[nextIdx].email_id);
 }
 
-function doneBar(d) {
+/* Bottom bar on each case. Unreviewed: primary "Looks right — next case"
+   (confirms), a quiet "Something's wrong" that reveals an inline note
+   field, and a quiet "Skip — next case". Reviewed: a status line plus
+   "Undo review" / "Next case". Same list-walking (getCaseListContext /
+   advanceCase) as before — only what counts as "done" changed. */
+function reviewBar(d) {
   const id = d.email_id;
   const context = getCaseListContext(id);
-  const done = isDone(id);
+  const review = getReview(id);
 
   const bar = el("div", "done-bar");
-  const actions = el("div", "done-bar-actions");
 
-  const primaryBtn = el("button", "btn btn-primary", done ? "Next case" : "Done — next case");
-  primaryBtn.type = "button";
-  primaryBtn.addEventListener("click", () => {
-    if (!context) return;
-    if (!isDone(id)) setDone(id, true);
-    advanceCase(id, context, { requireUndone: true });
-  });
-  actions.append(primaryBtn);
-
-  const quietBtn = el("button", "link-btn", done ? "Mark as not done" : "Skip — next case");
-  quietBtn.type = "button";
-  quietBtn.addEventListener("click", () => {
-    if (isDone(id)) {
-      setDone(id, false);
-      renderReview(id);
-      return;
+  if (review) {
+    const status = el("div", "review-status");
+    if (review.verdict === "confirmed") {
+      status.append(el("span", null, "You confirmed this."));
+    } else if (review.verdict === "flagged") {
+      status.append(el("span", null, "You flagged this: "));
+      status.append(el("span", "review-status-note", review.note));
+    } else {
+      status.append(el("span", null, "Done."));
     }
-    if (!context) return;
-    advanceCase(id, context, { requireUndone: false });
-  });
-  actions.append(quietBtn);
-  bar.append(actions);
+    bar.append(status);
+
+    const actions = el("div", "done-bar-actions");
+    const undoBtn = el("button", "link-btn", "Undo review");
+    undoBtn.type = "button";
+    undoBtn.addEventListener("click", () => {
+      clearReview(id);
+      renderReview(id);
+    });
+    actions.append(undoBtn);
+
+    const nextBtn = el("button", "btn btn-primary", "Next case");
+    nextBtn.type = "button";
+    nextBtn.addEventListener("click", () => {
+      if (!context) return;
+      advanceCase(id, context, { requireUndone: false });
+    });
+    actions.append(nextBtn);
+    bar.append(actions);
+  } else {
+    const actions = el("div", "done-bar-actions");
+
+    const confirmBtn = el("button", "btn btn-primary", "Looks right — next case");
+    confirmBtn.type = "button";
+    confirmBtn.addEventListener("click", () => {
+      setReview(id, "confirmed");
+      if (!context) return;
+      advanceCase(id, context, { requireUndone: true });
+    });
+    actions.append(confirmBtn);
+
+    const wrongBtn = el("button", "btn btn-quiet", "Something's wrong");
+    wrongBtn.type = "button";
+    wrongBtn.setAttribute("aria-expanded", "false");
+    actions.append(wrongBtn);
+
+    const skipBtn = el("button", "link-btn", "Skip — next case");
+    skipBtn.type = "button";
+    skipBtn.addEventListener("click", () => {
+      if (!context) return;
+      advanceCase(id, context, { requireUndone: false });
+    });
+    actions.append(skipBtn);
+
+    bar.append(actions);
+
+    const flagForm = el("div", "review-flag-form");
+    flagForm.hidden = true;
+    const fieldId = `review-note-${id.replace(/[^a-zA-Z0-9]+/g, "-")}`;
+    const label = el("label", "field-label", "What's wrong?");
+    label.setAttribute("for", fieldId);
+    flagForm.append(label);
+    const ta = document.createElement("textarea");
+    ta.id = fieldId;
+    ta.className = "field-input review-flag-textarea";
+    ta.rows = 3;
+    flagForm.append(ta);
+    const err = el("div", "account-error review-flag-error", "");
+    err.setAttribute("aria-live", "polite");
+    err.hidden = true;
+    flagForm.append(err);
+    const saveBtn = el("button", "btn btn-primary", "Save and next case");
+    saveBtn.type = "button";
+    saveBtn.addEventListener("click", () => {
+      const note = ta.value.trim();
+      if (!note) {
+        err.hidden = false;
+        err.textContent = "Tell us what's wrong before saving.";
+        ta.focus();
+        return;
+      }
+      setReview(id, "flagged", note);
+      if (!context) return;
+      advanceCase(id, context, { requireUndone: true });
+    });
+    flagForm.append(saveBtn);
+    bar.append(flagForm);
+
+    wrongBtn.addEventListener("click", () => {
+      flagForm.hidden = !flagForm.hidden;
+      wrongBtn.setAttribute("aria-expanded", String(!flagForm.hidden));
+      if (!flagForm.hidden) ta.focus();
+    });
+  }
 
   if (context) {
     const idx = context.list.findIndex((r) => r.email_id === id);
     bar.append(el("div", "done-bar-pos", `Case ${idx + 1} of ${context.list.length} in ${TAB_LABELS[context.tab]}`));
   }
 
-  bar.append(el("div", "done-bar-hint", "Press N to skip, D for done — next case."));
+  bar.append(el("div", "done-bar-hint", "Press N to skip, D for Looks right — next case."));
   return bar;
 }
 
-/* "n" = Skip to next, "d" = Done — next case. Ignored while typing anywhere,
-   or with a modifier held, so it never fights the reply textarea. */
+/* "n" = Skip to next, "d" = Looks right — next case. Ignored while typing
+   anywhere, or with a modifier held, so it never fights the reply
+   textarea. */
 function initCaseKeyboardNav() {
   addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -740,7 +1175,7 @@ function initCaseKeyboardNav() {
     if (k === "n") {
       advanceCase(id, context, { requireUndone: false });
     } else {
-      if (!isDone(id)) setDone(id, true);
+      if (!isReviewed(id)) setReview(id, "confirmed");
       advanceCase(id, context, { requireUndone: true });
     }
   });
@@ -809,10 +1244,52 @@ function bars(data) {
   return frag;
 }
 
+/* "Your checks of ClearDraft's answers" — only shown once at least one
+   case has been reviewed. Reviews are a single flat store shared across
+   both sources, so this counts every review regardless of which board it
+   came from. */
+function renderReviewsPanel(host) {
+  const ids = Object.keys(REVIEWS);
+  if (!ids.length) return;
+
+  let confirmed = 0, flagged = 0;
+  const flaggedList = [];
+  for (const id of ids) {
+    const r = REVIEWS[id];
+    if (r.verdict === "confirmed") confirmed++;
+    else if (r.verdict === "flagged") { flagged++; flaggedList.push({ id, note: r.note }); }
+  }
+  const total = ids.length;
+  const agreementDenom = confirmed + flagged;
+
+  const panel = el("div", "panel reviews-panel");
+  panel.append(el("h3", null, "Your checks of ClearDraft's answers (this browser)"));
+  panel.append(el("div", "sub", `You reviewed ${total} case${total === 1 ? "" : "s"}: ${confirmed} looked right, ${flagged} flagged as wrong`));
+  if (agreementDenom > 0) {
+    panel.append(el("div", "reviews-agreement", `Agreement: ${Math.round((confirmed / agreementDenom) * 100)}%`));
+  }
+  if (flaggedList.length) {
+    const list = el("ul", "reviews-flagged-list");
+    for (const f of flaggedList) {
+      const found = findRowById(f.id);
+      const li = el("li");
+      const a = el("a", null, found ? found.row.reference : f.id);
+      a.href = `#/case/${f.id}`;
+      li.append(a);
+      li.append(document.createTextNode(` — ${f.note}`));
+      list.append(li);
+    }
+    panel.append(list);
+  }
+  host.append(panel);
+}
+
 function renderAccuracy() {
   const s = DATA.stats;
   const host = $("#accuracy-body");
   host.replaceChildren();
+
+  renderReviewsPanel(host);
 
   const grid = el("div", "stat-grid");
   const stats = [
@@ -1136,9 +1613,11 @@ function renderBoardView() {
 
   const doneLine = $("#done-count-line");
   if (doneLine) {
-    const doneCount = activeBoard().filter((r) => isDone(r.email_id)).length;
-    doneLine.hidden = doneCount <= 0;
-    if (doneCount > 0) doneLine.textContent = `${doneCount} done`;
+    const board = activeBoard();
+    const reviewedCount = board.filter((r) => isReviewed(r.email_id)).length;
+    const flaggedCount = board.filter((r) => { const rv = getReview(r.email_id); return rv && rv.verdict === "flagged"; }).length;
+    doneLine.hidden = reviewedCount <= 0;
+    if (reviewedCount > 0) doneLine.textContent = `${reviewedCount} reviewed · ${flaggedCount} flagged`;
   }
 }
 
@@ -1815,6 +2294,7 @@ function toast(msg) {
   initAccountControl();
   initAccountForm();
   initCaseKeyboardNav();
+  initExportMenu();
 
   const mineCard = $("#home-card-mine");
   if (mineCard) mineCard.addEventListener("click", () => setSourceKey("mine"));

@@ -475,3 +475,65 @@ data/            the organiser bundle, committable
 
 Ownership is written into the module docstrings, not only into this file, so
 it is visible at the point of work.
+
+---
+
+## 12. Workshop 2 changes
+
+Five decisions taken in response to the organiser domain expert's session
+(Workshop 2, 2026), each stated the same way as the ADRs above: decision,
+why, trade-off.
+
+**Export design.** All three exports — Discrepancy report, Full results,
+Submission file — are generated client-side in `web/app.js`, from data
+already rendered on the page, rather than by a server round trip. Why: the
+expert asked for exportable results by name, and the UI already holds every
+value, source line and reason it would need to write; a server endpoint
+would duplicate that state for no benefit. **Formula-injection safe:** any
+CSV cell whose text begins with `=`, `+`, `-` or `@` is prefixed with a
+leading `'` before it is written, so a value pulled verbatim from a document
+(where an attacker or a careless typist could put `=CMD(...)`) cannot
+execute as a formula when the file is opened in a spreadsheet application.
+Trade-off: client-side generation means the export reflects only what the
+browser has loaded, not a fresh server-side re-run — acceptable, since the
+export is a report on a result already computed and verified.
+
+**Human review store.** Each case's review verdict (**Looks right**,
+**Something's wrong** plus a note, or skipped) is recorded per case, keyed
+the same way the mailbox is, and surfaces on the Accuracy page as "Your
+checks of ClearDraft's answers" (agreement %). Why: the expert asked for
+demos to show which steps a human validates and which they act on, and a
+review that is not recorded cannot be reported back. Trade-off: this is a
+record of agreement with ClearDraft's verdict, not a second ground truth —
+it never feeds back into the comparison logic itself, so a wrong human
+verdict cannot silently retrain the rules.
+
+**Confidence surfaced.** Every case already carried `decided_by` (rule or
+model); the review screen now shows it alongside a confidence label next to
+each field. Why: `decided_by` existed in the record for measurement
+(ADR-004); surfacing it to the reviewer turns an internal metric into the
+signal a person actually needs before trusting a value without re-reading
+the source. Trade-off: none of consequence — the field was already computed
+and verified, so this is display-only.
+
+**Asterisk normalisation.** `core/normalise.py:normalise_entity` now strips
+`*`/`**` continuation markers from party names (`_ENTITY_CONTINUATION`)
+before comparison, so `"EAST BRIGHT FZ-LLC *"` and `"EAST BRIGHT FZ-LLC"`
+match. Why: the expert noted real documents truncate a party name with an
+asterisk when it continues elsewhere on the page — formatting noise, not
+content. Trade-off: this is one specific, verified continuation convention;
+other partial-match conventions the expert also mentioned, such as spacing
+variants, are not yet covered — see "Known limits" in the README.
+
+**To-the-order-of note.** When a BL's consignee field reads "to the order
+of" (or "to order of"), the review screen adds a note explaining that this
+makes the Bill of Lading negotiable, which is legally different from one
+naming a consignee directly. Why: the expert raised this as a distinction
+the tool must not paper over. The note is **informational only and never
+changes the match/mismatch verdict** — comparison stays exact string
+equality on the normalised value (ADR-001), because deciding "is a
+negotiable BL an acceptable substitute for a named consignee" is a legal
+judgement, not a formatting question, and ADR-001's whole argument is that
+the model never decides a mismatch. Flagging it for the person to judge is
+the correct place for that decision to live, not a silent rule that could
+be wrong in either direction depending on the shipment.

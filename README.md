@@ -19,6 +19,11 @@ Averis x Monash Hackathon 2026.
    account on any device. **Sample company inbox** shows the full 520-email run.
 4. Open **Accuracy** to see the results on the full inbox and on mail the
    system has never seen.
+5. Open any case and use the human review buttons — **Looks right — next
+   case**, **Something's wrong** (with a note), or skip — to record whether
+   you agree with ClearDraft's answer. Then go to **Export** for
+   **Discrepancy report (CSV)**, **Full results (CSV)**, or **Submission file
+   (JSON)**.
 
 A shipping desk receives hundreds of emails a day in one mailbox: requests to
 check documents, requests for new shipping instructions, invoice queries,
@@ -74,6 +79,60 @@ The two documents routinely label the same field differently — `Port of
 Loading` in one and `Load Port` in the other, or a bilingual
 label that puts Chinese characters before `KGS` in a Word attachment. Alignment is by meaning,
 via the table in [`core/aliases.py`](core/aliases.py), not by header text.
+
+---
+
+## Who does what
+
+| ClearDraft | The person |
+|---|---|
+| Sorts every email into what it's asking for | Confirms or flags each result with **Looks right — next case** / **Something's wrong** (note) |
+| Reads both documents and locates all seven fields | Decides every case ClearDraft escalates instead of guessing |
+| Compares the two documents and shows the source line behind every value | Edits the drafted reply |
+| Drafts the reply, with a "Your part" line saying what to check or do | Sends the reply — **Open in Gmail** only prefills a compose window; ClearDraft never sends mail |
+
+Nothing is sent automatically. The person confirms, decides, edits, and sends.
+
+## Export
+
+- **Discrepancy report (CSV)** — one row per mismatch: field, SI value, BL
+  value, plain-English reason.
+- **Full results (CSV)** — one row per field per case: value, source line and
+  plain-English reason, plus the human review verdict.
+- **Submission file (JSON)** — the organiser's own submission format.
+
+All three are generated client-side, in the browser, from data already on
+the page.
+
+## Evidence
+
+| What was tested | Result | Where to see it |
+|---|---|---|
+| Automated test suite | 269 tests (268 pass, 1 skipped), no network, no API key, no model calls | `tests/`, `python -m pytest tests/ -q` |
+| Organiser corpus (520 emails, 250 attachments, 119 SI/BL pairs) | End-to-end score 1.0000, 46 of 46 planted discrepancies caught, full run in about 1.7s | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §9, **Accuracy** page |
+| Held-out set, written without reference to our rules (`data/challenge/`) | Category accuracy 67% → 100%, intent accuracy 50% → 100%, fields read under unfamiliar labels 2 of 41 → 41 of 41 (18 of 41 rules-only after later alias work); model decided 15 emails, 0 wrong, across 21 calls | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §9, `data/challenge/README.md` |
+| Every flow, checked live on the deployed site | Manual pass across home, inbox, check, accuracy, accounts | https://cleardraft-one.vercel.app |
+| Phone layouts, 320–414 px | No sideways scroll, 44 px tap targets | live site at that width |
+| Attack test — HTML/script in an email subject and body | Rendered as plain text, not executed | live site, "Your mail" upload |
+| Session cookie | `HttpOnly` and `Secure` | [docs/API.md](docs/API.md) "Sessions" |
+| Passwords | Never stored in plain text (scrypt-hashed) | [docs/API.md](docs/API.md) "Password hashing" |
+| Manual comparison time, per a Workshop 2 domain expert | Up to 10 minutes per SI/BL pair by hand. **Estimate**, not measured on this repo: the sample inbox has 119 pairs to compare, so up to about 20 staff-hours of comparison versus about 1.7 seconds of machine time — the person still reviews every flagged case and sends every reply | this table |
+
+## Known limits
+
+- **Partial matches beyond asterisk markers.** Real documents also vary by
+  spacing and other continuation conventions; only `*`/`**` continuation
+  markers in party names are normalised away today.
+- **"To the order of" is treated as the consignee value**, with an on-screen
+  note — it does not change the match/mismatch verdict. A negotiable Bill of
+  Lading made out "to the order of" is legally different from one naming a
+  consignee directly; the note flags this for the person to judge.
+- **The Accuracy page's held-out rules-only field figure (2 of 41) predates
+  later alias work.** Rules alone now read 18 of 41 under unfamiliar labels;
+  see the Evidence table above.
+- **No direct Gmail connection, by design.** Gmail read access needs
+  Google's restricted-scope security review. Add mail instead by pasting the
+  email text (plus SI/BL files) or dropping `.eml` files.
 
 ---
 
@@ -144,8 +203,8 @@ sends the two files to `POST /api/check` and runs the same pipeline on them.
 python -m pytest tests/ -q
 ```
 
-217 tests, with no network, no API key and no model calls: the suite
-switches the model off so it is free and repeatable.
+269 tests (268 pass, 1 skipped), with no network, no API key and no model
+calls: the suite switches the model off so it is free and repeatable.
 `tests/test_contract.py` proves the plumbing rather than the accuracy: that all
 520 emails parse, that the submission record shape matches the organiser's
 sample exactly, that no label aliases to two different fields, and that
