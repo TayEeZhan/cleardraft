@@ -36,3 +36,5 @@ build/
 out/submission*.json
 *.log
 .pytest_cache/
+
+.vercel
