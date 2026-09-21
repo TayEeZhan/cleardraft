@@ -3,6 +3,17 @@
 **Shipping document verification for a shared operations inbox.**
 Averis x Monash Hackathon 2026.
 
+**Live demo: [cleardraft-one.vercel.app](https://cleardraft-one.vercel.app)**
+
+### Try it in 30 seconds
+
+1. Open the live demo and press **See a real check**: a draft BL with two
+   wrong fields, the source line behind every value, and the reply it drafted.
+2. Go to **Check a pair** and press **No files? Use a sample pair** →
+   **Sample with discrepancies**. That pair is read live on the server.
+3. Open **Accuracy** to see the results on the full inbox and on mail the
+   system has never seen.
+
 A shipping desk receives hundreds of emails a day in one mailbox: requests to
 check documents, requests for new shipping instructions, invoice queries,
 operational updates, and spam. For a document-check request, a clerk opens two
@@ -30,6 +41,16 @@ decline, and reading a field the format parsers could not locate — and
 anything it returns must appear verbatim in the source document or the value
 is discarded and the email is escalated.
 
+```
+email ──> 1 classify ──> 2 extract ──> 3 compare ──> 4 decide ──> 5 reply
+          rules first     4 format       normalise    escalation   template
+          model fallback  readers +      + exact      ladder       fill only,
+          (evidence-      alias table,   equality,                 never sends
+           gated)         model for      no AI
+                          missing fields
+                          (verbatim gate)
+```
+
 Every record reports `decided_by`, so the proportion of decisions made without
 the model is measurable rather than asserted.
 
@@ -45,7 +66,7 @@ trade-offs: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 The two documents routinely label the same field differently — `Port of
 Loading` in one and `Load Port` in the other, or a bilingual
-`Gross Weight (<chinese> KGS)` in a Word attachment. Alignment is by meaning,
+label that puts Chinese characters before `KGS` in a Word attachment. Alignment is by meaning,
 via the table in [`core/aliases.py`](core/aliases.py), not by header text.
 
 ---
@@ -92,13 +113,24 @@ Or against the organiser's docker server instead of a local folder
 python scripts/run_pipeline.py --server http://localhost:8080 --out out/submission.json
 ```
 
-Output confirms every stage ran (during the build it listed any stage still
-stubbed, so progress was visible):
+Expected output:
 
 ```
 wrote 520 records to out/submission.json in 2.5s
 no stubs - every stage is implemented
 ```
+
+## See the website locally
+
+```bash
+python -m http.server 5190 --directory web            # the UI, reading web/public/data.json
+python -m uvicorn api.index:app --port 8011           # the API behind "Check a pair"
+python scripts/export_ui_data.py                      # refresh the UI snapshot after a code change
+```
+
+The inbox and accuracy screens show a saved run of the full 520-email
+pipeline (`web/public/data.json`). The **Check a pair** screen is live: it
+sends the two files to `POST /api/check` and runs the same pipeline on them.
 
 ## Test it
 
@@ -106,6 +138,8 @@ no stubs - every stage is implemented
 python -m pytest tests/ -q
 ```
 
+217 tests, with no network, no API key and no model calls: the suite
+switches the model off so it is free and repeatable.
 `tests/test_contract.py` proves the plumbing rather than the accuracy: that all
 520 emails parse, that the submission record shape matches the organiser's
 sample exactly, that no label aliases to two different fields, and that
@@ -165,8 +199,12 @@ below for that.
 | `core/normalise.py`, `core/compare.py` | Stage 3 — reduce and compare. No AI | Ee Zhan |
 | `core/decide.py` | Stage 4 — the escalation precedence ladder | Ee Zhan |
 | `core/reply.py` | Template-filled draft reply. Never free model text | Ee Zhan |
+| `core/recheck.py` | Amended-draft re-check: fixed, still wrong, newly broken | Ee Zhan |
 | `core/pipeline.py` | The orchestrator, taking each stage as an injected callable | Ee Zhan |
-| `adapters/` | Everything that touches the outside world | Ee Zhan |
+| `adapters/` | Everything that touches the outside world (model, inbox) | Ee Zhan |
+| `api/index.py` | FastAPI on Vercel: `/api/health`, `/api/check` | Ee Zhan |
+| `web/` | The website: plain HTML, CSS and JavaScript, no build step | Ee Zhan |
+| `scripts/` | Batch run, UI snapshot export, held-out challenge run | — |
 | `eval/` | The scoring harness | Zi Qi |
 | `data/` | The organiser's inbox and attachments | — |
 
