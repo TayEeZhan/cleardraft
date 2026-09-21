@@ -12,7 +12,9 @@ OWNER: Sheng Kuan.
 """
 from __future__ import annotations
 
+import importlib
 import os
+import sys
 from typing import Protocol
 
 from core.types import ExtractedDoc
@@ -96,4 +98,37 @@ def supported() -> tuple[str, ...]:
 # Without these imports the registry is empty, for_path() returns None for
 # every file, and extract() reports "no parser registered" for all 250
 # attachments - a silent, total extraction failure that still exits zero.
-from core.parsers import docx, pdf, txt, xlsx  # noqa: E402,F401  (side effect)
+#
+# Each adapter is imported INDEPENDENTLY. An unguarded `import pdfplumber`
+# inside one adapter used to raise here and take extraction down for all 250
+# attachments, including the 192 .txt files that need no library at all. One
+# absent library must cost us that one format, not the batch.
+
+#: Adapters whose third-party library is absent, e.g. {"pdf": "pdfplumber"}.
+#: Exposed so the pipeline summary and the accuracy screen can say out loud
+#: which formats are degraded, rather than hiding it.
+MISSING_PARSERS: dict[str, str] = {}
+
+#: (module, the library it needs). txt is first and needs nothing, so most of
+#: the corpus keeps working whatever else is unavailable.
+_ADAPTERS: tuple[tuple[str, str | None], ...] = (
+    ("txt", None),
+    ("xlsx", "openpyxl"),
+    ("docx", "python-docx"),
+    ("pdf", "pdfplumber"),
+)
+
+for _name, _requires in _ADAPTERS:
+    try:
+        importlib.import_module(f"core.parsers.{_name}")
+    except ImportError as exc:
+        # ImportError ONLY. A missing library is an environment fact and the
+        # other three formats must survive it. A SyntaxError or a bug inside
+        # an adapter is our own defect and must still fail loudly in tests.
+        MISSING_PARSERS[_name] = _requires or str(exc)
+        print(
+            f"core.parsers: .{_name} adapter unavailable "
+            f"(install {_requires or _name}); those attachments will escalate "
+            f"as NEEDS_REVIEW / unreadable",
+            file=sys.stderr,
+        )
