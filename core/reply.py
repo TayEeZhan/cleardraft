@@ -200,3 +200,59 @@ def _draft_reply(email: Email, decision: Decision) -> str:
         return CLEAR_TEMPLATE.format(name=name, ref=ref)
 
     return NOTHING_TO_CHECK_TEMPLATE.format(name=name, ref=ref)
+
+
+# ---------------------------------------------------------------------------
+# Follow-up after the carrier sends an amended draft. Same rule as above:
+# template fill only, built from values compare() already verified.
+# ---------------------------------------------------------------------------
+RECHECK_CLEAR_TEMPLATE = """Hi {name},
+
+Thanks for the amended draft BL for {ref}. All 7 fields now match the SI.
+OK to proceed.
+"""
+
+RECHECK_TEMPLATE = """Hi {name},
+
+Thanks for the amended draft BL for {ref}. We re-checked all 7 fields.
+
+{sections}
+
+Please amend and resend.
+"""
+
+
+def _v2_line(row) -> str:
+    c = row.v2
+    label = FIELD_LABELS.get(row.field, str(row.field))
+    si_val = c.si.value if c.si is not None else "(missing)"
+    bl_val = c.bl.value if c.bl is not None else "(missing)"
+    return f"- {label} - SI: {si_val} / BL: {bl_val}"
+
+
+def draft_recheck_reply(email: Email, rows) -> str:
+    """Never raises. rows come from core.recheck.recheck()."""
+    try:
+        name, ref = _recipient_name(email), _reference(email)
+        still = [r for r in rows if r.outcome == "still_wrong"]
+        broke = [r for r in rows if r.outcome == "newly_broken"]
+        unread = [r for r in rows if r.outcome == "unreadable"]
+        fixed = [r for r in rows if r.outcome == "fixed"]
+        if not (still or broke or unread):
+            return RECHECK_CLEAR_TEMPLATE.format(name=name, ref=ref)
+        parts = []
+        if fixed:
+            parts.append("Now correct: " + ", ".join(FIELD_LABELS.get(r.field, r.field) for r in fixed) + ".")
+        if still:
+            parts.append("Still not matching the SI:\n" + "\n".join(_v2_line(r) for r in still))
+        if broke:
+            parts.append("Changed in this amendment and now wrong:\n" + "\n".join(_v2_line(r) for r in broke))
+        if unread:
+            parts.append("Could not be read in the amended draft: "
+                         + ", ".join(FIELD_LABELS.get(r.field, r.field) for r in unread) + ".")
+        return RECHECK_TEMPLATE.format(name=name, ref=ref, sections="\n\n".join(parts))
+    except Exception as exc:
+        return REVIEW_TEMPLATE.format(
+            name="team", ref=getattr(email, "email_id", "this case"),
+            reason=f"re-check reply drafting failed ({exc.__class__.__name__}: {exc})",
+        )

@@ -297,3 +297,42 @@ def test_interleaved_pdf_label_is_detected_not_compared() -> None:
         "",
     ):
         assert not _looks_interleaved("notify", clean), clean
+
+
+# ---------------------------------------------------------------------------
+# Re-check of an amended draft. The demo amendment is hand-written to hit all
+# three outcomes, so this pins the behaviour the demo video depends on.
+# ---------------------------------------------------------------------------
+def test_recheck_sorts_fixed_still_wrong_and_newly_broken() -> None:
+    from core.extract import extract
+    from core.recheck import all_clear, recheck
+
+    si = extract(os.path.join(DATA, "attachments", "email_004_SI.txt"))
+    v1 = extract(os.path.join(DATA, "attachments", "email_004_BL.txt"))
+    v2 = extract(os.path.join(DATA, "demo", "email_004_BL_v2.txt"))
+    outcome = {r.field: r.outcome for r in recheck(si, v1, v2)}
+
+    assert outcome["consignee"] == "fixed"
+    assert outcome["notify_party"] == "still_wrong"
+    # the one a tired clerk misses: correcting one field broke another
+    assert outcome["container_count"] == "newly_broken"
+    assert outcome["shipper"] == "ok"
+    assert not all_clear(recheck(si, v1, v2))
+    # re-checking the ORIGINAL draft against itself changes nothing
+    assert all(r.outcome in ("ok", "still_wrong") for r in recheck(si, v1, v1))
+
+
+def test_recheck_reply_names_the_newly_broken_field() -> None:
+    from core.extract import extract
+    from core.recheck import recheck
+    from core.reply import draft_recheck_reply
+
+    si = extract(os.path.join(DATA, "attachments", "email_004_SI.txt"))
+    v1 = extract(os.path.join(DATA, "attachments", "email_004_BL.txt"))
+    v2 = extract(os.path.join(DATA, "demo", "email_004_BL_v2.txt"))
+    email = Email(email_id="email_004", sender="a@b.com",
+                  subject="REQUEST BL DRAFT", body="Hi Mitchelle, OC 5ALT-01226.")
+    text = draft_recheck_reply(email, recheck(si, v1, v2))
+    assert "Container Count" in text and "now wrong" in text
+    assert "Notify Party" in text
+    assert "OK to proceed" not in text

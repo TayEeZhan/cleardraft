@@ -27,10 +27,18 @@ from core.classify import classify                            # noqa: E402
 from core.compare import compare                              # noqa: E402
 from core.decide import decide                                # noqa: E402
 from core.extract import extract                              # noqa: E402
-from core.reply import FIELD_LABELS, _reference, draft_reply   # noqa: E402
+from core.recheck import recheck                              # noqa: E402
+from core.reply import FIELD_LABELS, _reference, draft_reply, draft_recheck_reply  # noqa: E402
 from core.types import COMPARE_FIELDS                         # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+#: Hand-authored amended drafts. See data/demo/README.md - demo only, never scored.
+_manifest = os.path.join(ROOT, "data", "demo", "amendments.json")
+AMENDMENTS: dict = (
+    json.load(open(_manifest, encoding="utf-8")).get("amendments", {})
+    if os.path.exists(_manifest) else {}
+)
 
 
 def _fv(field_value, source: str) -> "dict | None":
@@ -121,6 +129,25 @@ def main() -> int:
                 "bl": _fv(c.bl, bl.path if bl else ""),
             })
 
+        recheck_block = None
+        amended = AMENDMENTS.get(email.email_id)
+        if amended and si is not None and bl is not None and si.readable and bl.readable:
+            v2 = extract(os.path.join(ROOT, "data", amended))
+            rrows = recheck(si, bl, v2)
+            recheck_block = {
+                "source": amended,
+                "demo": True,
+                "rows": [{
+                    "field": r.field,
+                    "label": FIELD_LABELS.get(r.field, r.field),
+                    "outcome": r.outcome,
+                    "v1": r.v1.bl.value if r.v1.bl else None,
+                    "v2": r.v2.bl.value if r.v2.bl else None,
+                    "si": r.v2.si.value if r.v2.si else None,
+                } for r in rrows],
+                "reply_draft": draft_recheck_reply(email, rrows),
+            }
+
         detail[email.email_id] = {
             "email_id": email.email_id,
             "subject": email.subject,
@@ -138,6 +165,7 @@ def main() -> int:
             "documents": {"si": _doc(si), "bl": _doc(bl)},
             "comparisons": rows,
             "reply_draft": reply,
+            "recheck": recheck_block,
         }
 
     runtime = time.time() - started

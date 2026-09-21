@@ -135,7 +135,12 @@ function renderReview(id) {
   host.append(v);
 
   if (d.comparisons.length) host.append(seamTable(d));
-  host.append(replyCard(d));
+  if (d.recheck) {
+    host.append(recheckCard(d.recheck));
+    host.append(replyCard(d, d.recheck.reply_draft, "Follow-up reply, ready to send", d.reply_draft));
+  } else {
+    host.append(replyCard(d, d.reply_draft, "Reply, ready to send", null));
+  }
 }
 
 /* The seven-row table. Mismatches pinned to the top — the clerk's job is to
@@ -203,33 +208,91 @@ function seamTable(d) {
   return wrap;
 }
 
-function replyCard(d) {
+/* One primary action: open a real, pre-filled draft in the clerk's own mail
+   app. It is a mailto: link - ClearDraft still cannot send anything; the
+   clerk's own client opens with the text in it, and the clerk presses Send. */
+function replyCard(d, text, title, earlier) {
   const card = el("div", "reply-card");
   const head = el("div", "reply-head");
-  head.append(el("h3", null, "Reply, ready to send"));
+  head.append(el("h3", null, title));
   head.append(el("div", "reply-note", "Built from the checked values. Not written by a model."));
   card.append(head);
 
-  const body = el("div", "reply-body", d.reply_draft || "");
+  const body = el("div", "reply-body", text || "");
   card.append(body);
 
+  if (earlier) {
+    const past = el("details", "reply-past");
+    past.append(el("summary", null, "First discrepancy note, already sent"));
+    past.append(el("div", "reply-body", earlier));
+    card.append(past);
+  }
+
   const foot = el("div", "reply-foot");
-  const btn = el("button", "btn btn-primary", "Copy reply");
-  btn.addEventListener("click", async () => {
+  const subject = /^re[:_]/i.test(d.subject) ? d.subject : `RE: ${d.subject}`;
+  const open = el("a", "btn btn-primary", "Open draft in mail app");
+  open.href = `mailto:${encodeURIComponent(d.from)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text || "")}`;
+  open.addEventListener("click", () => toast("Draft opened in your mail app. Check it, then press Send."));
+  foot.append(open);
+
+  const copy = el("button", "btn btn-quiet", "Copy text");
+  copy.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(d.reply_draft || "");
-      toast("Reply copied. Paste it into your mail client and send.");
+      await navigator.clipboard.writeText(text || "");
+      toast("Reply copied.");
     } catch {
       const r = document.createRange();
       r.selectNodeContents(body);
       const sel = getSelection();
       sel.removeAllRanges(); sel.addRange(r);
-      toast("Selected — press Ctrl+C to copy.");
+      toast("Selected - press Ctrl+C to copy.");
     }
   });
-  foot.append(btn);
+  foot.append(copy);
   foot.append(el("span", "btn-hint", "ClearDraft never sends mail. You do."));
   card.append(foot);
+  return card;
+}
+
+/* The second half of the job: the carrier sent a corrected draft. Every field
+   is sorted by what the amendment did to it. "Broken by this amendment" goes
+   first - it is the one a tired clerk misses, because they only re-read the
+   fields they complained about. */
+const OUTCOME = {
+  newly_broken: ["Broken by this amendment", "mismatch"],
+  still_wrong:  ["Still wrong", "mismatch"],
+  unreadable:   ["Could not be read", "review"],
+  fixed:        ["Fixed", "match"],
+  ok:           ["Unchanged, correct", "quiet"],
+};
+
+function recheckCard(rc) {
+  const card = el("div", "recheck");
+  const head = el("div", "recheck-head");
+  head.append(el("h3", null, "Amended draft received, re-checked"));
+  if (rc.demo) head.append(el("span", "chip chip-quiet", "demo document"));
+  card.append(head);
+
+  const order = ["newly_broken", "still_wrong", "unreadable", "fixed", "ok"];
+  for (const kind of order) {
+    const rows = rc.rows.filter((r) => r.outcome === kind);
+    if (!rows.length) continue;
+    const [label, tone] = OUTCOME[kind];
+    const grp = el("div", `recheck-group tone-${tone}`);
+    grp.append(el("div", "recheck-label", `${label} (${rows.length})`));
+    for (const r of rows) {
+      const line = el("div", "recheck-row");
+      line.append(el("span", "recheck-field", r.label));
+      if (kind === "ok") {
+        line.append(el("span", "recheck-val", r.v2 || ""));
+      } else {
+        line.append(el("span", "recheck-val", `${r.v1 ?? "-"}  →  ${r.v2 ?? "-"}`));
+        line.append(el("span", "recheck-si", `SI says ${r.si ?? "-"}`));
+      }
+      grp.append(line);
+    }
+    card.append(grp);
+  }
   return card;
 }
 

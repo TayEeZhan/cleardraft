@@ -1,0 +1,6 @@
+{
+  "_note": "DEMO DATA authored by the ClearDraft team. Not part of the organiser dataset. The organiser corpus contains no amended drafts, so this one file exists only to demonstrate the re-check flow.",
+  "amendments": {
+    "email_004": "demo/email_004_BL_v2.txt"
+  }
+}
