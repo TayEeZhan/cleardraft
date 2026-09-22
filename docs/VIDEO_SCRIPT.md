@@ -55,8 +55,8 @@ Lading, which is what the carrier typed. Then they compare seven fields by
 hand.
 
 The domain expert at Workshop 2 told us this takes **up to ten minutes per
-pair**. In our sample inbox of 520 emails, only 220 even ask for a check,
-so everything has to be sorted first.
+pair**. In our sample inbox of 520 emails, only 220 are about these
+documents at all, so everything has to be sorted first.
 
 If one field slips through, a wrong Bill of Lading is issued. That means
 amendment fees, bank discrepancy fees and delayed cargo. It hits the
