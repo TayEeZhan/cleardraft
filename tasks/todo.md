@@ -21,7 +21,7 @@ Deadline: Tue 22 Sep 2026. Read `PLAN.md` first, then your own brief in
 
 ## Phase 1 — parallel build  (Mon 00:00-12:00)
 
-### Sheng Kuan — see `docs/BRIEF_SHENG_KUAN.md`
+### Sheng Kuan
 - [x] `core/parsers/txt.py`
 - [x] `core/parsers/xlsx.py`
 - [x] `core/parsers/docx.py`
@@ -29,7 +29,7 @@ Deadline: Tue 22 Sep 2026. Read `PLAN.md` first, then your own brief in
 - [x] Alias table extended beyond the generator's labels (PR #3)
 - [x] `core/extract.py` with the verification gate
 
-### Zi Qi — see `docs/BRIEF_ZI_QI.md`
+### Zi Qi
 - [x] `core/classify.py` rule tier (Zi Qi, PR #1)
 - [x] Model fallback through `adapters/model.py` (evidence-gated)
 - [x] Dev slice, confusion matrix, macro-F1, regression test (`eval/dev.py`, `eval/metrics.py`, `tests/test_eval.py`)
