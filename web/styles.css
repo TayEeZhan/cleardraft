@@ -607,6 +607,9 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   box-shadow: var(--shadow); min-width: 230px; padding: 6px;
 }
 .export-menu[hidden] { display: none; }
+/* The button sits at the right of the toolbar on wide screens: open the
+   menu leftwards there so it never runs off the page. Phones keep left:0. */
+@media (min-width: 641px) { .export-menu { left: auto; right: 0; } }
 .export-menu-item {
   display: block; width: 100%; text-align: left; font-family: inherit; font-size: 13.5px;
   color: var(--ink); background: none; border: 0; border-radius: 4px; padding: 10px;
