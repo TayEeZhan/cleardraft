@@ -470,6 +470,6 @@ ceremony question-and-answer session.
 
 | | Role |
 |---|---|
-| **Ee Zhan** ([@TayEeZhan](https://github.com/TayEeZhan)) | Architecture, comparison engine, API, interface, deployment |
-| **Sheng Kuan** ([@shengkuan06](https://github.com/shengkuan06)) | Document extraction, format adapters, label alignment |
-| **Zi Qi** ([@chessoreo](https://github.com/chessoreo)) | Email classification, evaluation harness |
+| **Tay Ee Zhan** ([@TayEeZhan](https://github.com/TayEeZhan)) | Architecture, comparison engine, API, interface, deployment |
+| **Goh Sheng Kuan** ([@shengkuan06](https://github.com/shengkuan06)) | Document extraction, format adapters, label alignment |
+| **Ong Zi Qi** ([@chessoreo](https://github.com/chessoreo)) | Email classification, evaluation harness |

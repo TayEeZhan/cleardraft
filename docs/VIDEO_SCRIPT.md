@@ -8,8 +8,8 @@ cut the parts marked **(cut if over)**.
 and why it matters, the tech stack, a live demo, and impact with metrics and
 feedback. **All three of you must appear on camera**: you open with cameras on.
 
-Slide numbers refer to the deck. Presenters: **EZ** = Ee Zhan,
-**SK** = Sheng Kuan, **ZQ** = Zi Qi. Team: **Larpers**.
+Slide numbers refer to the deck. Presenters: **EZ** = Tay Ee Zhan,
+**SK** = Goh Sheng Kuan, **ZQ** = Ong Zi Qi. Team: **Larpers**.
 
 ---
 
@@ -34,13 +34,13 @@ Slide numbers refer to the deck. Presenters: **EZ** = Ee Zhan,
 
 ## 0:00–0:25 · Intro (cameras on, all three) — slide 1 (Introduction) → slide 2 on the last line
 
-**EZ:** Hi, we're **Team Larpers**. I'm Ee Zhan. I built the architecture,
+**EZ:** Hi, we're **Team Larpers**. I'm Tay Ee Zhan. I built the architecture,
 the API and the website.
 
-**SK:** I'm Sheng Kuan. I built how ClearDraft reads documents, in four
+**SK:** I'm Goh Sheng Kuan. I built how ClearDraft reads documents, in four
 different file formats.
 
-**ZQ:** And I'm Zi Qi. I built the email sorting and the evaluation. Our
+**ZQ:** And I'm Ong Zi Qi. I built the email sorting and the evaluation. Our
 project is **ClearDraft: shipping paperwork, checked in seconds.**
 *[Switch to slide 2, the ClearDraft title slide]*
 
