@@ -5,6 +5,9 @@ Averis x Monash Hackathon 2026.
 
 **Live demo: [cleardraft-one.vercel.app](https://cleardraft-one.vercel.app)**
 
+**Written responses** (problem fit, AI and cloud, user feedback, coding
+challenges, success metrics, scalability): [jump to the section](#written-responses).
+
 ### Try it in 30 seconds
 
 1. Open the live demo and press **See a real check**: a draft BL with two
@@ -135,6 +138,168 @@ the page.
   email text (plus SI/BL files) or dropping `.eml` files.
 
 ---
+
+## Written responses
+
+Answers to the six questions in the submission requirements.
+
+### 1. Problem-solution alignment
+
+**The problem.** A shipping desk works from one shared inbox. For every
+document-check request, a person opens the Shipping Instruction (what the
+customer asked for) and the draft Bill of Lading (what the carrier typed) and
+compares seven fields by hand. The organiser's domain expert told us at
+Workshop 2 that one comparison takes **up to 10 minutes**. A miss means a wrong
+Bill of Lading is issued, followed by amendment fees and delayed cargo. The same
+inbox also holds SI requests, invoice queries and spam that must be sorted first.
+
+**How each part of ClearDraft answers it.**
+
+| Pain | What ClearDraft does |
+|---|---|
+| Mixed inbox | Sorts every email by category **and** intent ("check these" is different from "please send the draft") |
+| Four file formats, different labels | Four format readers plus a label table, so "Load Port" and "Port of Loading" are the same field |
+| Slow, error-prone comparison | Compares all 7 fields exactly, with no AI in the comparison, in milliseconds |
+| "Can I trust it?" | Shows the source line behind every value it read |
+| A wrong "all clear" is the expensive error | Escalates to a person when it cannot prove a result, instead of guessing |
+| Writing the reply | Drafts it from the checked values; the person edits it and sends it from Gmail |
+| The corrected draft comes back | Re-checks it: what is fixed, what is still wrong, what the amendment broke |
+| Reporting | Exports a discrepancy report (CSV) and a submission file (JSON) |
+
+What it deliberately does **not** do: send mail on its own, or let a model
+decide that two values differ.
+
+### 2. AI and cloud infrastructure integration
+
+**AI, used only where rules cannot reach.** The model is `claude-haiku-4-5`,
+called through one adapter (`adapters/model.py`) in exactly two places:
+reading an email's intent when the rules decline, and finding a field the
+format readers could not locate. **Every value the model returns must appear
+word for word in the source document, or it is discarded and the case goes to a
+person** (the verification gate). The comparison itself never uses AI
+(ADR-001 in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). Every result records
+`decided_by` and a confidence value, and the case page shows both.
+
+*Why a small model:* it sees very little work. On the held-out set it made 21
+calls in total (7,772 tokens), decided 15 emails and got none wrong. On the
+organiser's inbox it was needed 0 times. A larger model would cost more for
+no measured gain. `CLEARDRAFT_USE_MODEL=0` switches it off instantly.
+
+**Cloud.**
+
+| Piece | Service |
+|---|---|
+| Website | Vercel, static files from `web/` |
+| API | One Vercel Python function (FastAPI, `api/index.py`): `/api/health`, `/api/check`, `/api/process-email`, `/api/auth/*`, `/api/mail*` |
+| Accounts and saved mail | Upstash Redis through Vercel Storage; scrypt password hashes; HttpOnly, Secure session cookie |
+| Model | Anthropic API; key held in a Vercel environment variable |
+| Deploy | Every push to `main` deploys automatically |
+
+It fails safe: with no account store, sign-in is hidden and everything else works.
+If the store goes down, uploads carry on as signed-out. With the model off, the
+rules run alone and anything unresolved is escalated.
+
+**Getting mail in.** A user pastes an email (with its SI and BL files) or drops
+`.eml` files. Both go through the same REST endpoint. We chose not to connect
+Gmail directly: reading Gmail needs Google's restricted-scope security review,
+which takes weeks. The inbox is a port (ADR-007), so a mailbox connector plugs in
+later without changing the pipeline.
+
+### 3. User feedback / testing
+
+**Domain-expert feedback, and what we changed because of it (Workshop 2):**
+
+| The expert said | What we built |
+|---|---|
+| Teams need to export results: each mismatch, the SI value, the BL value and why | Discrepancy report (CSV), Full results (CSV), Submission file (JSON), per-case CSV |
+| Show which steps a person validates and which they act on | "Your part" line on every case; "Looks right" / "Something's wrong" review buttons |
+| Real documents show partial matches, such as `*` continuation markers | Party names now ignore `*` / `**` markers |
+| "To the order of" is legally different from a named consignee | An on-screen note on those cases (it never changes the verdict) |
+| Managers watch accuracy and missing fields | Every export row states match, mismatch or missing for all 7 fields |
+
+**A feedback loop inside the product.** People mark each case "Looks right" or
+"Something's wrong" with a note. The Accuracy page reports how often reviewers
+agreed with ClearDraft, and flagged notes show which labels or rules need work.
+
+**Testing.**
+- 269 automated tests (268 pass, 1 skipped). They run with no network, no key and no model calls.
+- The organiser's 520-email inbox: end-to-end score 1.0000, with 46 of 46 planted discrepancies caught.
+- A held-out set written without reference to our rules, to measure generalisation (see Success metrics).
+- Scripted end-to-end passes on the live site covering:
+  - every flow;
+  - phone widths from 320 to 414 px (no sideways scroll, 44 px tap targets);
+  - an attack email with HTML and script in it (shown as plain text);
+  - cookie and password handling.
+
+### 4. Coding challenges
+
+1. **One field, four formats, many labels.** The same company comes as
+   `KTP CO., LTD | address` in Excel, `KTP CO., LTD` followed by the address on
+   a new line in Word, and the address on a continuation line in text files.
+   We compare the name only (cut at the first separator), and a label table maps
+   variants, including bilingual labels, to one field.
+2. **Trusting a model's reading.** A language model can "read" a value that is
+   not in the document. Fix: the verification gate. A model value is used only
+   if it appears verbatim in the source; otherwise the case is escalated.
+3. **Exact comparison without false alarms.** `131,058 KG` and `131058` must
+   match, and `NANTONG (CNNTG)` must match `NANTONG`, but a different company or
+   one extra container must not. We use per-field normalisers: decimal-safe
+   weights, stripping only a trailing port code (LOCODE), and entity punctuation
+   rules. Each has its own tests.
+4. **Untrusted email in a web page.** Uploaded mail can carry hostile content.
+   Fixes:
+   - everything is rendered as text, never as HTML;
+   - CSV cells that start with `=`, `+`, `-` or `@` are neutralised;
+   - attachment names are sanitised before they touch the disk.
+5. **Serverless limits.**
+   - Vercel caps a request body at 4.5 MB, so the site sends one email per request.
+   - Every Python file in `api/` becomes its own function, so private modules
+     start with `_`.
+   - A reply box measured while hidden grew 5,671 px tall. It now measures only
+     when visible and re-measures when its width changes.
+
+### 5. Success metrics
+
+| Metric | Why it matters | Result now |
+|---|---|---|
+| Discrepancies caught end to end (organiser inbox) | A missed discrepancy means a wrong BL is issued | 46 of 46; score 1.0000 (validation on the one labelled corpus) |
+| Generalisation to unseen mail (held-out set) | Real inboxes do not match the sample | Email category 67% (rules alone) → 100% (with the model); intent 50% → 100%; fields under unfamiliar labels 2 of 41 → 41 of 41 |
+| Wrong answers from the model | Trust | 0 of 15 model decisions wrong; 0 answers rejected by the gate |
+| Share decided without AI | Cost, speed, predictability | 100% on the organiser inbox |
+| Speed | Replaces up to 10 minutes of manual comparison per pair | 520 emails in about 1.7 s; one live check in about 0.02 s, or about 3.5 s when the model is consulted |
+| Reviewer agreement | The operational metric once people use it | Measured live on the Accuracy page ("Looks right" vs "Something's wrong") |
+
+**Estimate:** the sample inbox has 119 document pairs. At up to 10 minutes each,
+that is up to about 20 staff-hours of comparison. People still review flagged
+cases and send every reply.
+
+### 6. Scalability plans
+
+**Today's load.** The documentation team is 5 to 10 people (Workshop 2). One
+process handles the whole 520-email inbox in under 2 seconds. Each email is
+processed on its own (ADR-006), so nothing is shared between requests.
+
+**How it grows, cheapest first** (detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) section 7):
+1. **More rules, fewer model calls.** Each new label alias removes model calls
+   permanently, at no infrastructure cost.
+2. **Layout Memory.** Fingerprint a document's label layout and reuse its field
+   map. Carriers reuse a few templates, so repeats skip the model entirely.
+3. **More workers.** Emails are independent, so a queue and stateless workers
+   scale out without touching `core/`. Remaining model calls can run in
+   parallel, with back-off on rate limits.
+4. **Mail arriving by itself.** Add a forwarding address or mailbox webhook
+   (for example Microsoft Graph or an inbound-email service) that feeds the same
+   `/api/process-email` path, through the inbox port.
+5. **Storage for teams.** Today a user's saved mail is one Redis record, capped
+   at 200 emails. At scale this moves to:
+   - Postgres with one row per email;
+   - an object store for attachments;
+   - per-company isolation;
+   - an audit trail of who confirmed, flagged or sent each case.
+
+**Known ceilings** (not built yet, stated plainly): the model rate limit under
+bursts, large scanned PDFs held in memory, and cross-email features that need a
+shipment store. The fix for each is in the architecture document.
 
 ## Setup
 
