@@ -6,11 +6,10 @@ cut the parts marked **(cut if over)**.
 
 **Organiser rules this script meets:** team and project name, the problem
 and why it matters, the tech stack, a live demo, and impact with metrics and
-feedback. **All three of you must appear on camera.** The minimum is a slide
-with all three photos, but cameras on is better.
+feedback. **All three of you must appear on camera**: you open with cameras on.
 
 Slide numbers refer to the deck. Presenters: **EZ** = Ee Zhan,
-**SK** = Sheng Kuan, **ZQ** = Zi Qi. Replace `[Team name]` everywhere.
+**SK** = Sheng Kuan, **ZQ** = Zi Qi. Team: **Larpers**.
 
 ---
 
@@ -33,9 +32,9 @@ Slide numbers refer to the deck. Presenters: **EZ** = Ee Zhan,
 
 ---
 
-## 0:00–0:25 · Intro (all three, on camera) — slides 1 → 2
+## 0:00–0:25 · Intro (cameras on, all three) — slide 1 (Introduction) → slide 2 on the last line
 
-**EZ:** Hi, we're **[Team name]**. I'm Ee Zhan. I built the architecture,
+**EZ:** Hi, we're **Team Larpers**. I'm Ee Zhan. I built the architecture,
 the API and the website.
 
 **SK:** I'm Sheng Kuan. I built how ClearDraft reads documents, in four
@@ -43,6 +42,7 @@ different file formats.
 
 **ZQ:** And I'm Zi Qi. I built the email sorting and the evaluation. Our
 project is **ClearDraft: shipping paperwork, checked in seconds.**
+*[Switch to slide 2, the ClearDraft title slide]*
 
 ---
 
@@ -162,7 +162,7 @@ repeat templates never need AI. It will also connect straight to a
 mailbox.
 
 **EZ:** ClearDraft is live at **cleardraft-one.vercel.app**, and the code
-is on GitHub. Thanks for watching. We're **[Team name]**. *(All wave.)*
+is on GitHub. Thanks for watching. We're **Team Larpers**. *(All wave.)*
 
 ---
 

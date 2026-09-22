@@ -47,38 +47,34 @@
 
 **The deck**
 
-1. Replace `[Team name]` on slides 1, 2 and 19 and in the footers.
-2. Add all three photos on slide 2. The organisers require every member to
-   appear. Photos are the minimum; cameras on in the video are better.
-3. Download it as a PDF and upload it to Google Drive.
-4. Set sharing to **Anyone with the link → Viewer**.
+1. Download it as a PDF and upload it to Google Drive.
+2. Set sharing to **Anyone with the link → Viewer**.
 
 **The video**
 
-5. Record with all three cameras on, following [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md).
-6. Keep it **5:00 or less**: every 30 s over costs 1 mark.
-7. Upload to YouTube as **Unlisted**.
+3. Record with all three cameras on (you open on camera), following [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md).
+4. Keep it **5:00 or less**: every 30 s over costs 1 mark.
+5. Upload to YouTube as **Unlisted**.
 
 **Check every link in an incognito window**
 
-8. The video plays, the Drive PDF opens, the repo is public, and the live
+6. The video plays, the Drive PDF opens, the repo is public, and the live
    site loads.
 
 **Before recording, on the live site**
 
-9. Run `localStorage.clear()` so "Your mail" starts at (0).
-10. Check that https://cleardraft-one.vercel.app/api/health returns
+7. Run `localStorage.clear()` so "Your mail" starts at (0).
+8. Check that https://cleardraft-one.vercel.app/api/health returns
     `"status":"ok"`.
 
 **Finally**
 
-11. Submit all five components on the hackathon site.
+9. Submit all five components on the hackathon site.
 
 ## Owners
 
 | Task | Who |
 |---|---|
-| Team name and photos on the deck | Everyone |
 | Record the video (screen share plus three cameras) | Ee Zhan drives the demo; all three speak |
 | Upload the video and the deck, share the links | [Name] |
 | Submit the form | [Name] |
