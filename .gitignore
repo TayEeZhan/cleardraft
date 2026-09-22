@@ -41,3 +41,6 @@ out/submission*.json
 
 # Session handoff notes - local only, may reference private context
 HANDOFF.md
+
+# Demo script kept local, not published
+docs/VIDEO_SCRIPT.md

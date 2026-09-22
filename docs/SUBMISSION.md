@@ -7,7 +7,7 @@
 | # | Component | What to submit | Status |
 |---|---|---|---|
 | 1 | Project description | The short text below. Paste it into the form. | Ready |
-| 2 | Demo video link | YouTube, **Unlisted** or Public (not Private), at most 5:00. Script: [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md) | **To record** |
+| 2 | Demo video link | YouTube, **Unlisted** or Public (not Private), at most 5:00. Script: `docs/VIDEO_SCRIPT.md` (kept locally, not in the repo) | **To record** |
 | 3 | GitHub repository link | https://github.com/TayEeZhan/cleardraft (the README has setup and the written responses) | Ready |
 | 4 | Live prototype link | https://cleardraft-one.vercel.app | Ready |
 | 5 | Slide deck / documentation link | The deck, downloaded as PDF and uploaded to Google Drive (see below) | **To upload** |
@@ -52,7 +52,7 @@
 
 **The video**
 
-3. Record with all three cameras on (you open on camera), following [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md).
+3. Record with all three cameras on (you open on camera), following `docs/VIDEO_SCRIPT.md` (local file).
 4. Keep it **5:00 or less**: every 30 s over costs 1 mark.
 5. Upload to YouTube as **Unlisted**.
 
