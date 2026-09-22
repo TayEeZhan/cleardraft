@@ -453,6 +453,7 @@ dataset.
 | [docs/PROJECT_DESCRIPTION.md](docs/PROJECT_DESCRIPTION.md) | The hackathon submission summary: name, problem, approach, results |
 | [PLAN.md](PLAN.md) | What we learned from the dataset, the build plan, team split |
 | [docs/RUBRIC_MAP.md](docs/RUBRIC_MAP.md) | One distinct piece of evidence per judging criterion |
+| [docs/PARSER_REVIEW.md](docs/PARSER_REVIEW.md) | Where the four document readers break on a real document: four findings fixed, two open, and the dependency pins the deployment needs |
 | [tasks/todo.md](tasks/todo.md) | Live task board |
 
 ---
