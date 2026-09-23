@@ -757,7 +757,7 @@ function renderReview(id) {
    <field>, for this account only. Never a window.confirm()/alert()/
    prompt(): the confirm step is inline, right under the row — same
    interaction shape as the review screen's "Something's wrong" flag form. */
-function markSameConfirmPanel(c, d) {
+function markSameConfirmPanel(c, d, markBtn) {
   const panel = el("div", "mark-same-confirm");
   panel.hidden = true;
 
@@ -817,10 +817,16 @@ function markSameConfirmPanel(c, d) {
         return;
       }
 
-      actions.hidden = true;
+      // .mark-same-actions/.btn/.link-btn all set their own `display`, which
+      // overrides the `[hidden]` UA rule (an author style always beats it,
+      // regardless of specificity) — so Confirm/Cancel stayed visible and
+      // clickable after a successful save. Removing the node sidesteps that
+      // entirely instead of fighting the cascade.
+      actions.remove();
       prompt.hidden = true;
       note.hidden = false;
       note.textContent = "Saved — this pair will clear on your next check.";
+      if (markBtn) markBtn.disabled = true;
     } catch {
       err.hidden = false;
       err.textContent = "Could not reach the server. Check your connection and try again.";
@@ -926,7 +932,7 @@ function seamTable(d) {
       const markBtn = el("button", "link-btn mark-same-btn", "Mark as same");
       markBtn.type = "button";
       markBtn.setAttribute("aria-expanded", "false");
-      const panel = markSameConfirmPanel(c, d);
+      const panel = markSameConfirmPanel(c, d, markBtn);
       markBtn.addEventListener("click", () => {
         panel.hidden = !panel.hidden;
         markBtn.setAttribute("aria-expanded", String(!panel.hidden));
