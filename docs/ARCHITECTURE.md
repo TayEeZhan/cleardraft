@@ -244,6 +244,76 @@ downloads land in a private per-instance temp directory keyed by a flattened,
 validated name. Every request carries a timeout, and an unreachable server
 raises a `ConnectionError` naming the URL, not a bare socket traceback.
 
+### ADR-011 — Learned equivalences: exact pairs, per account, live path only.
+
+**Status.** Proposed. **Deciders.** Sheng Kuan (pending Ee Zhan).
+
+**Context.** The deck (p.21) promises that ClearDraft "learns from every
+correction": on a mismatch row, a reviewer clicks "these are the same" and the
+next identical case clears itself. Reading the repo moved three things from
+the deck's original sketch, all simpler and safer:
+1. No new storage adapter. `adapters/store.py` already is the storage port
+   (`Store`: get/set/delete/incr), with Upstash Redis in production and
+   `MemoryStore` in tests. The deck's "JSON for the demo, SQLite later" is
+   unnecessary — this reuses exactly what `api/_accounts.py` already uses for
+   users, sessions, and mail.
+2. Per-account, not global. Accounts already exist (`api/_accounts.py:
+   current_user`). A learned pair is stored under `equiv:{email}`, so one
+   careless click only ever affects that clerk's own future checks — the
+   deck's biggest risk, "one click harms everyone", does not arise. A
+   signed-out visitor never sees the control and is never affected by anyone
+   else's pairs.
+3. No change to the frozen `core/types.py`. A learned match is detectable
+   without a new field: `matched == True` while `si_norm != bl_norm` can only
+   happen via an approved pair, so the API derives `"learned": true` from
+   that, and `core/decide.py`, `core/reply.py` and the type contract are
+   untouched.
+
+**Decision.** `core/compare.py` gains an optional `known_equal` keyword
+parameter (default `None`); with it omitted or `None`, behaviour is
+byte-identical to before this feature existed, which is what keeps
+`scripts/run_pipeline.py` and `scripts/export_ui_data.py` reproducible for
+the organiser's scorer — neither script ever passes it. When given, a mismatch
+downgrades to a match only for one of the five text fields
+(`core/equivalence.py:EQUIVALENCE_FIELDS` — shipper, consignee, notify_party,
+port_of_loading, port_of_discharge; never `container_count` or
+`gross_weight_kg`, where a numeric difference is always a real defect), only
+when the row is not `undecidable`, and only for the exact normalised pair a
+signed-in clerk approved, order-independent (`core/equivalence.py:pair_key`).
+A new router, `api/_equivalences.py`, exposes `GET/POST/DELETE
+/api/equivalences`, gated on `current_user()` the same way `api/_accounts.py`
+gates mail; `api/index.py` passes `known_equal=lookup_for(request)` at both of
+its `compare()` call sites. The web UI (`web/app.js`) adds a "Mark as same"
+button on an eligible mismatch row with an inline (never `window.confirm`)
+confirm step, a "Matched via a pair you approved" chip with Undo on a row
+that came back `learned: true`, and a "Learned pairs" list with Undo on the
+account page.
+
+**Alternatives considered.**
+- *A rule derived from the pair* (e.g. "treat any X as Y from now on"). Rejected:
+  a rule generalises past what a human actually verified and risks hiding a
+  real future defect between two similarly-named parties.
+- *A global, shared equivalence table.* Rejected for this round: one clerk's
+  mistake would silently change every other clerk's results with no
+  attribution. Per-account is the safe default; a team-approved list with a
+  supervisor sign-off is a natural follow-up, not a blocker.
+- *Fuzzy/similarity matching instead of exact pairs.* Rejected for the same
+  reason ADR-001 rejects it for the base comparison: every planted defect in
+  this dataset is substantive, so a threshold that helps a formatting mismatch
+  is a threshold that can also swallow a real one.
+
+**Consequences.**
+- Applies to *new* checks only; a result already saved in a mailbox keeps its
+  original verdict — that snapshot is also the audit trail of what a clerk
+  actually saw at the time.
+- If the store is unavailable, `lookup_for()` returns `None` and the button
+  hides; checks run exactly as they do today. A `known_equal` that raises for
+  any other reason is caught inside `compare()` and treated as no-match, never
+  as a crash.
+- Bounded and reversible: at most 500 pairs per account, each value at most
+  200 characters, every pair attributed (who, when, source) and undoable in
+  one click, both from the row it cleared and from the account page.
+
 ---
 
 ## 6. Failure modes

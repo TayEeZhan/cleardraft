@@ -267,6 +267,18 @@
 
       <p class="account-switch"><button type="button" class="link-btn" id="account-switch-btn">Already have an account? Sign in</button></p>
     </form>
+
+    <div id="account-signed-in" hidden>
+      <div class="view-head">
+        <h1>Your account</h1>
+        <p class="account-reassure">Signed in as <span id="account-signed-in-email"></span>.</p>
+      </div>
+      <section class="panel" id="learned-pairs-panel">
+        <h3>Learned pairs</h3>
+        <p class="sub">Exact SI/BL pairs you've marked as the same. Each one clears only that field, only for you, until you undo it.</p>
+        <div id="learned-pairs-list"></div>
+      </section>
+    </div>
   </section>
 
   <section id="view-accuracy" class="view" hidden>

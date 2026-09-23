@@ -835,3 +835,48 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .reviews-flagged-list { margin: 12px 0 0; padding-left: 18px; }
 .reviews-flagged-list li { font-size: 13px; color: var(--ink-2); margin-bottom: 5px; }
 .reviews-flagged-list a { color: var(--marine); font-weight: 500; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ── Learned equivalences ──────────────────────────────────────── */
+/* "Mark as same" button on a mismatch row: same look and 44px tap area
+   as .proof-btn, so a seven-row table doesn't grow a second visual style. */
+.mark-same-btn {
+  margin-top: 5px; margin-left: 12px; font-family: var(--mono); font-size: 10.5px;
+  color: var(--ink-3); background: none; border: 0; padding: 0;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.mark-same-btn:hover { color: var(--ink); }
+.mark-same-btn { padding-top: 15px; padding-bottom: 15px; margin-top: -10px; margin-bottom: -15px; }
+
+.mark-same-confirm {
+  padding: 12px 14px; background: var(--surface-2); border-top: 1px dashed var(--rule);
+}
+.mark-same-prompt { font-size: 13px; color: var(--ink); margin-bottom: 10px; }
+.mark-same-prompt b { font-family: var(--mono); }
+.mark-same-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.mark-same-actions .btn { min-height: 38px; padding: 7px 16px; }
+.mark-same-error { margin-bottom: 10px; }
+.mark-same-saved-note { margin-top: 0; }
+
+.learned-chip-wrap { display: inline-flex; align-items: center; gap: 8px; margin-top: 5px; }
+.learned-chip { display: inline-block; }
+.learned-undo-btn {
+  font-size: 11px; padding: 0; min-height: 0; color: var(--ink-3);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.learned-undo-btn:hover { color: var(--ink); }
+
+/* ── #/account, signed in: "Learned pairs" list ─────────────────── */
+.learned-pair-row {
+  display: grid; grid-template-columns: 130px 1fr 100px auto;
+  align-items: center; gap: 12px; padding: 10px 0;
+  border-bottom: 1px solid var(--rule); font-size: 13px;
+}
+.learned-pair-row:last-child { border-bottom: 0; }
+.learned-pair-field { color: var(--ink-2); text-transform: capitalize; }
+.learned-pair-values { font-family: var(--mono); font-size: 12.5px; color: var(--ink); overflow-wrap: anywhere; }
+.learned-pair-arrow { color: var(--ink-3); margin: 0 6px; }
+.learned-pair-added { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+
+@media (max-width: 620px) {
+  .learned-pair-row { grid-template-columns: 1fr; gap: 4px; }
+}

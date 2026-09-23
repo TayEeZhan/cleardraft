@@ -269,6 +269,14 @@ function humanise(text) {
   return out;
 }
 
+/* Learned equivalences: mirrors core/equivalence.py's EQUIVALENCE_FIELDS.
+   Only a mismatch on one of these five text fields can be "marked as
+   same" — container_count and gross_weight_kg never get the button, a
+   number difference is always a real defect. */
+const LEARNABLE_FIELDS = new Set([
+  "shipper", "consignee", "notify_party", "port_of_loading", "port_of_discharge",
+]);
+
 function stateOf(c) {
   if (c.undecidable) return "unknown";
   return c.matched ? "match" : "mismatch";
@@ -745,6 +753,136 @@ function renderReview(id) {
   }
 }
 
+/* "Mark as same" — teach ClearDraft that this exact SI/BL pair is the same
+   <field>, for this account only. Never a window.confirm()/alert()/
+   prompt(): the confirm step is inline, right under the row — same
+   interaction shape as the review screen's "Something's wrong" flag form. */
+function markSameConfirmPanel(c, d) {
+  const panel = el("div", "mark-same-confirm");
+  panel.hidden = true;
+
+  const prompt = el("div", "mark-same-prompt");
+  prompt.append(document.createTextNode("Treat "));
+  prompt.append(el("b", null, (c.si && c.si.value) || ""));
+  prompt.append(document.createTextNode(" and "));
+  prompt.append(el("b", null, (c.bl && c.bl.value) || ""));
+  prompt.append(document.createTextNode(` as the same ${FIELD_WORDS[c.field] || c.field} for future checks?`));
+  panel.append(prompt);
+
+  const err = el("div", "account-error mark-same-error");
+  err.hidden = true;
+  err.setAttribute("aria-live", "polite");
+  panel.append(err);
+
+  const note = el("div", "note mark-same-saved-note");
+  note.hidden = true;
+  panel.append(note);
+
+  const actions = el("div", "mark-same-actions");
+  const confirmBtn = el("button", "btn btn-primary", "Confirm");
+  confirmBtn.type = "button";
+  const cancelBtn = el("button", "link-btn", "Cancel");
+  cancelBtn.type = "button";
+  actions.append(confirmBtn, cancelBtn);
+  panel.append(actions);
+
+  cancelBtn.addEventListener("click", () => { panel.hidden = true; });
+
+  confirmBtn.addEventListener("click", async () => {
+    confirmBtn.disabled = true;
+    err.hidden = true;
+    try {
+      const r = await fetch("/api/equivalences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          field: c.field,
+          si_value: (c.si && c.si.value) || "",
+          bl_value: (c.bl && c.bl.value) || "",
+          source: (d && d.email_id) || "",
+        }),
+      });
+      let j = {};
+      try { j = await r.json(); } catch { /* no body */ }
+
+      if (r.status === 401) {
+        err.hidden = false;
+        err.textContent = "Sign in to teach ClearDraft";
+        return;
+      }
+      if (!r.ok) {
+        err.hidden = false;
+        err.textContent = (j && j.detail) || "Could not save this pair.";
+        return;
+      }
+
+      actions.hidden = true;
+      prompt.hidden = true;
+      note.hidden = false;
+      note.textContent = "Saved — this pair will clear on your next check.";
+    } catch {
+      err.hidden = false;
+      err.textContent = "Could not reach the server. Check your connection and try again.";
+    } finally {
+      confirmBtn.disabled = false;
+    }
+  });
+
+  return panel;
+}
+
+/* Finds the stored pair behind a learned:true row (by field + normalised
+   values, either order) and deletes it. A comparison row only ever carries
+   si_norm/bl_norm and a "learned" boolean, never a storage id — this is
+   the one extra round trip that avoids putting storage ids in every check
+   response just for the rare Undo click. */
+async function undoLearnedPair(c) {
+  try {
+    const listResp = await fetch("/api/equivalences", { credentials: "same-origin" });
+    if (!listResp.ok) return false;
+    const listBody = await listResp.json();
+    const pairs = (listBody && listBody.pairs) || [];
+    const match = pairs.find((p) => p.field === c.field && (
+      (p.a === c.si_norm && p.b === c.bl_norm) || (p.a === c.bl_norm && p.b === c.si_norm)
+    ));
+    if (!match) return false;
+    const delResp = await fetch(`/api/equivalences/${encodeURIComponent(match.id)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+    return delResp.ok;
+  } catch {
+    return false;
+  }
+}
+
+/* A row whose JSON came back learned:true — matched only because a clerk
+   already approved this exact pair. The chip says so; Undo removes the
+   pair so the row goes back to a mismatch on the next check. */
+function learnedChip(c) {
+  const wrap = el("span", "learned-chip-wrap");
+  const chip = el("span", "chip chip-quiet learned-chip", "Matched via a pair you approved");
+  wrap.append(chip);
+
+  const undoBtn = el("button", "link-btn learned-undo-btn", "Undo");
+  undoBtn.type = "button";
+  undoBtn.addEventListener("click", async () => {
+    undoBtn.disabled = true;
+    const removed = await undoLearnedPair(c);
+    if (removed) {
+      chip.textContent = "Removed";
+      undoBtn.remove();
+      toast("Pair removed — recheck to see the mismatch again.");
+    } else {
+      undoBtn.disabled = false;
+      toast("Could not remove this pair. Try again.");
+    }
+  });
+  wrap.append(undoBtn);
+  return wrap;
+}
+
 /* The seven-row table. Mismatches pinned to the top — the clerk's job is to
    find what is wrong, so what is wrong goes first. */
 function seamTable(d) {
@@ -763,6 +901,7 @@ function seamTable(d) {
 
     const label = el("div", "f-label");
     label.append(el("span", null, c.label));
+    if (c.learned) label.append(learnedChip(c));
     row.append(label);
 
     for (const side of ["si", "bl"]) {
@@ -779,6 +918,22 @@ function seamTable(d) {
     }
 
     wrap.append(row);
+
+    /* "Mark as same": only a mismatch, only a learnable text field, only
+       for a signed-in clerk. Signed-out visitors and numeric-field rows
+       never see the button at all. */
+    if (st === "mismatch" && LEARNABLE_FIELDS.has(c.field) && ACCOUNT.user) {
+      const markBtn = el("button", "link-btn mark-same-btn", "Mark as same");
+      markBtn.type = "button";
+      markBtn.setAttribute("aria-expanded", "false");
+      const panel = markSameConfirmPanel(c, d);
+      markBtn.addEventListener("click", () => {
+        panel.hidden = !panel.hidden;
+        markBtn.setAttribute("aria-expanded", String(!panel.hidden));
+      });
+      label.append(markBtn);
+      wrap.append(panel);
+    }
 
     /* Proof is offered only where it is needed. Seven identical "show the
        source" links down a table is a wall of choices the clerk has to read
@@ -2218,6 +2373,79 @@ function initAccountForm() {
   });
 }
 
+/* ── #/account, signed in: "Learned pairs" ──────────────────────
+   A signed-in visitor to #/account sees their learned pairs instead of the
+   create-account/sign-in form (that form is for signed-out visitors). */
+function renderAccountSignedInView() {
+  $("#account-form").hidden = true;
+  $("#account-signed-in").hidden = false;
+  $("#account-signed-in-email").textContent = ACCOUNT.user.email;
+  loadLearnedPairs();
+}
+
+function learnedPairRow(pair) {
+  const row = el("div", "learned-pair-row");
+
+  const field = el("div", "learned-pair-field", FIELD_WORDS[pair.field] || pair.field);
+  row.append(field);
+
+  const values = el("div", "learned-pair-values");
+  values.append(el("span", null, pair.si_raw || pair.a));
+  values.append(el("span", "learned-pair-arrow", "↔"));
+  values.append(el("span", null, pair.bl_raw || pair.b));
+  row.append(values);
+
+  const added = el("div", "learned-pair-added");
+  const addedDate = pair.added_at ? new Date(pair.added_at) : null;
+  added.textContent = addedDate && !isNaN(addedDate) ? addedDate.toLocaleDateString() : "";
+  row.append(added);
+
+  const undoBtn = el("button", "link-btn", "Undo");
+  undoBtn.type = "button";
+  undoBtn.addEventListener("click", async () => {
+    undoBtn.disabled = true;
+    try {
+      const r = await fetch(`/api/equivalences/${encodeURIComponent(pair.id)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      if (r.ok) {
+        toast("Pair removed.");
+        loadLearnedPairs();
+      } else {
+        undoBtn.disabled = false;
+        toast("Could not remove this pair. Try again.");
+      }
+    } catch {
+      undoBtn.disabled = false;
+      toast("Could not reach the server. Try again.");
+    }
+  });
+  row.append(undoBtn);
+
+  return row;
+}
+
+async function loadLearnedPairs() {
+  const host = $("#learned-pairs-list");
+  if (!host) return;
+  host.replaceChildren(el("div", "empty", "Loading…"));
+  try {
+    const r = await fetch("/api/equivalences", { credentials: "same-origin" });
+    if (!r.ok) { host.replaceChildren(el("div", "empty", "Could not load your learned pairs.")); return; }
+    const j = await r.json();
+    const pairs = (j && j.pairs) || [];
+    host.replaceChildren();
+    if (!pairs.length) {
+      host.append(el("div", "empty", "No pairs learned yet — mark a mismatch as “the same” on a checked case to teach one."));
+      return;
+    }
+    for (const pair of pairs) host.append(learnedPairRow(pair));
+  } catch {
+    host.replaceChildren(el("div", "empty", "Could not reach the server."));
+  }
+}
+
 function route() {
   const h = location.hash;
   const views = { home: $("#view-home"), board: $("#view-board"), review: $("#view-review"), accuracy: $("#view-accuracy"), check: $("#view-check"), account: $("#view-account") };
@@ -2238,9 +2466,15 @@ function route() {
   } else if (h.startsWith("#/account")) {
     active = "account";
     views.account.hidden = false;
-    setAccountMode("signup");
-    const emailInput = $("#account-email-input");
-    if (emailInput) emailInput.focus();
+    if (ACCOUNT.user) {
+      renderAccountSignedInView();
+    } else {
+      $("#account-form").hidden = false;
+      $("#account-signed-in").hidden = true;
+      setAccountMode("signup");
+      const emailInput = $("#account-email-input");
+      if (emailInput) emailInput.focus();
+    }
   } else if (h.startsWith("#/board")) {
     active = "board";
     views.board.hidden = false;
