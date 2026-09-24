@@ -35,6 +35,11 @@ let ADDMAIL_OPEN = false;    // populated "Your mail": is the add-mail panel ope
    what was typed. */
 const EDITS = new Map();
 
+/* Case ids where the clerk has opened a reply (Gmail, Copy or Other mail
+   app) this session. Session-only, like EDITS — it only needs to soften the
+   primary button's wording while the tab is open, not to persist. */
+const REPLY_OPENED = new Set();
+
 /* Human review of a case: whether a clerk confirmed ClearDraft's answer,
    flagged it as wrong (with a note), or — from the old "Done" feature —
    just marked it done. Persisted per-browser only, keyed by email_id;
@@ -783,11 +788,13 @@ function seamTable(d) {
     /* Proof is offered only where it is needed. Seven identical "show the
        source" links down a table is a wall of choices the clerk has to read
        past to find the one row that matters. A row that matched needs no
-       defending; a row that differs or could not be read does. */
+       defending; a row that differs or could not be read does. A row that
+       actually mismatches starts open — that is the one line a tired clerk
+       must not have to click to see. */
     const provable = st !== "match" && ((c.si && c.si.raw) || (c.bl && c.bl.raw));
     if (provable) {
       const panel = el("div", "proof");
-      panel.hidden = true;
+      panel.hidden = st !== "mismatch";
       for (const side of ["si", "bl"]) {
         const fv = c[side];
         if (!fv || !fv.raw) continue;
@@ -797,8 +804,8 @@ function seamTable(d) {
         panel.append(line);
         panel.append(el("div", "proof-src", `${fv.source}${fv.line_no ? `, line ${fv.line_no}` : ""}`));
       }
-      const btn = el("button", "proof-btn", "where this came from");
-      btn.setAttribute("aria-expanded", "false");
+      const btn = el("button", "proof-btn", panel.hidden ? "where this came from" : "hide");
+      btn.setAttribute("aria-expanded", String(!panel.hidden));
       btn.addEventListener("click", () => {
         panel.hidden = !panel.hidden;
         btn.setAttribute("aria-expanded", String(!panel.hidden));
@@ -904,6 +911,9 @@ function replyCard(d, text, title, earlier) {
   const gmailBtn = el("button", "btn btn-primary", "Open in Gmail");
   gmailBtn.type = "button";
   gmailBtn.addEventListener("click", async () => {
+    REPLY_OPENED.add(d.email_id);
+    const doneBar = document.querySelector(".done-bar");
+    if (doneBar) doneBar.replaceWith(reviewBar(d));
     const currentText = ta.value;
     const toPart = d.from ? `&to=${encodeURIComponent(d.from)}` : "";
     const url = `https://mail.google.com/mail/?view=cm&fs=1${toPart}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(currentText)}`;
@@ -925,6 +935,9 @@ function replyCard(d, text, title, earlier) {
   const copyBtn = el("button", "btn btn-quiet", "Copy text");
   copyBtn.type = "button";
   copyBtn.addEventListener("click", async () => {
+    REPLY_OPENED.add(d.email_id);
+    const doneBar = document.querySelector(".done-bar");
+    if (doneBar) doneBar.replaceWith(reviewBar(d));
     try {
       await navigator.clipboard.writeText(ta.value);
       toast("Reply copied.");
@@ -938,7 +951,12 @@ function replyCard(d, text, title, earlier) {
 
   const otherBtn = el("a", "btn btn-quiet", "Other mail app");
   otherBtn.href = mailtoHref(startText);
-  otherBtn.addEventListener("click", () => toast("Draft opened in your mail app. Check it, then press Send."));
+  otherBtn.addEventListener("click", () => {
+    REPLY_OPENED.add(d.email_id);
+    const doneBar = document.querySelector(".done-bar");
+    if (doneBar) doneBar.replaceWith(reviewBar(d));
+    toast("Draft opened in your mail app. Check it, then press Send.");
+  });
   foot.append(otherBtn);
 
   foot.append(el("span", "btn-hint", "ClearDraft never sends mail. You do."));
@@ -1033,19 +1051,88 @@ function advanceCase(id, context, { requireUndone }) {
     return;
   }
   const nextIdx = nextUnreviewedIndex(list, idx);
-  if (nextIdx === -1) { goToBoardTab(source, tab, query, `All reviewed in ${TAB_LABELS[tab]}.`); return; }
-  navigateToCase(list[nextIdx].email_id);
+  if (nextIdx !== -1) { navigateToCase(list[nextIdx].email_id); return; }
+
+  /* Every discrepancy in this source is reviewed. Rather than dump the
+     clerk back on an empty tab, walk them straight into the tab ClearDraft
+     could not decide for itself — that queue is the one still owed
+     attention, and it is easy to forget once the mismatch pile is clear. */
+  if (tab === "mismatch") {
+    const needsReview = computeFilteredList(source, "needs_review", "").find((r) => !isReviewed(r.email_id));
+    if (needsReview) {
+      TAB = "needs_review";
+      for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === "needs_review"));
+      navigateToCase(needsReview.email_id);
+      toast(`Discrepancies done — now: ${TAB_LABELS.needs_review} (N)`);
+      return;
+    }
+  }
+  goToBoardTab(source, tab, query, `All reviewed in ${TAB_LABELS[tab]}.`);
 }
 
-/* Bottom bar on each case. Unreviewed: primary "Looks right — next case"
-   (confirms), a quiet "Something's wrong" that reveals an inline note
-   field, and a quiet "Skip — next case". Reviewed: a status line plus
-   "Undo review" / "Next case". Same list-walking (getCaseListContext /
-   advanceCase) as before — only what counts as "done" changed. */
+/* A small, undoable confirmation: every save (button or the D key) tells the
+   clerk what just got recorded and offers one click to take it back, so a
+   fast click-through never becomes an un-fixable mistake once the page has
+   already moved to the next case. */
+function confirmToast(d) {
+  const id = d.email_id;
+  const ref = d.reference || id;
+  toast(`Confirmed ${ref}`, {
+    label: "Undo",
+    onClick: () => { clearReview(id); navigateToCase(id); },
+  });
+}
+
+/* The inline "what's wrong" note field, shared by the discrepancy/match
+   "Something's wrong" flow and the needs-a-human "I found a problem" flow.
+   onSave receives the trimmed, non-empty note. */
+function buildReviewNoteForm(id, saveLabel, onSave) {
+  const form = el("div", "review-flag-form");
+  form.hidden = true;
+  const fieldId = `review-note-${id.replace(/[^a-zA-Z0-9]+/g, "-")}`;
+  const label = el("label", "field-label", "What's wrong?");
+  label.setAttribute("for", fieldId);
+  form.append(label);
+  const ta = document.createElement("textarea");
+  ta.id = fieldId;
+  ta.className = "field-input review-flag-textarea";
+  ta.rows = 3;
+  form.append(ta);
+  const err = el("div", "account-error review-flag-error", "");
+  err.setAttribute("aria-live", "polite");
+  err.hidden = true;
+  form.append(err);
+  const saveBtn = el("button", "btn btn-primary", saveLabel);
+  saveBtn.type = "button";
+  saveBtn.addEventListener("click", () => {
+    const note = ta.value.trim();
+    if (!note) {
+      err.hidden = false;
+      err.textContent = "Tell us what's wrong before saving.";
+      ta.focus();
+      return;
+    }
+    onSave(note);
+  });
+  form.append(saveBtn);
+  return { form, textarea: ta };
+}
+
+/* Bottom bar on each case. The wording and the choices on offer depend on
+   what ClearDraft itself decided (verdictKind):
+   - mismatch: primary "Discrepancy confirmed — next case" — never worded so
+     it could be misread as "the BL is fine".
+   - match: primary "All clear confirmed — next case".
+   - review (needs a human): no "looks right" button at all — ClearDraft
+     refused to decide, so the clerk chooses "I checked — documents agree"
+     or "I found a problem" instead of rubber-stamping.
+   Reviewed: a status line plus "Undo review" / "Next case". Same
+   list-walking (getCaseListContext / advanceCase) as before. */
 function reviewBar(d) {
   const id = d.email_id;
   const context = getCaseListContext(id);
   const review = getReview(id);
+  const kind = verdictKind(d);
 
   const bar = el("div", "done-bar");
 
@@ -1057,7 +1144,8 @@ function reviewBar(d) {
       status.append(el("span", null, "You flagged this: "));
       status.append(el("span", "review-status-note", review.note));
     } else {
-      status.append(el("span", null, "Done."));
+      status.append(el("span", null, review.note ? "Done: " : "Done."));
+      if (review.note) status.append(el("span", "review-status-note", review.note));
     }
     bar.append(status);
 
@@ -1078,13 +1166,53 @@ function reviewBar(d) {
     });
     actions.append(nextBtn);
     bar.append(actions);
-  } else {
+  } else if (kind === "review") {
     const actions = el("div", "done-bar-actions");
 
-    const confirmBtn = el("button", "btn btn-primary", "Looks right — next case");
+    const checkedBtn = el("button", "btn btn-primary", "I checked — documents agree");
+    checkedBtn.type = "button";
+    checkedBtn.addEventListener("click", () => {
+      setReview(id, "done", "checked by hand: documents agree");
+      confirmToast(d);
+      if (!context) return;
+      advanceCase(id, context, { requireUndone: true });
+    });
+    actions.append(checkedBtn);
+
+    const problemBtn = el("button", "btn btn-quiet", "I found a problem");
+    problemBtn.type = "button";
+    problemBtn.setAttribute("aria-expanded", "false");
+    actions.append(problemBtn);
+
+    bar.append(actions);
+
+    const noteForm = buildReviewNoteForm(id, "Save and next case", (note) => {
+      setReview(id, "done", `problem: ${note}`);
+      confirmToast(d);
+      if (!context) return;
+      advanceCase(id, context, { requireUndone: true });
+    });
+    bar.append(noteForm.form);
+
+    problemBtn.addEventListener("click", () => {
+      noteForm.form.hidden = !noteForm.form.hidden;
+      problemBtn.setAttribute("aria-expanded", String(!noteForm.form.hidden));
+      if (!noteForm.form.hidden) noteForm.textarea.focus();
+    });
+  } else {
+    const replySent = kind === "mismatch" && REPLY_OPENED.has(id);
+    if (replySent) bar.append(el("span", "chip chip-quiet", "Reply opened"));
+
+    const actions = el("div", "done-bar-actions");
+
+    const primaryLabel = replySent
+      ? "Reply sent — next case"
+      : kind === "mismatch" ? "Discrepancy confirmed — next case" : "All clear confirmed — next case";
+    const confirmBtn = el("button", "btn btn-primary", primaryLabel);
     confirmBtn.type = "button";
     confirmBtn.addEventListener("click", () => {
       setReview(id, "confirmed");
+      confirmToast(d);
       if (!context) return;
       advanceCase(id, context, { requireUndone: true });
     });
@@ -1105,42 +1233,18 @@ function reviewBar(d) {
 
     bar.append(actions);
 
-    const flagForm = el("div", "review-flag-form");
-    flagForm.hidden = true;
-    const fieldId = `review-note-${id.replace(/[^a-zA-Z0-9]+/g, "-")}`;
-    const label = el("label", "field-label", "What's wrong?");
-    label.setAttribute("for", fieldId);
-    flagForm.append(label);
-    const ta = document.createElement("textarea");
-    ta.id = fieldId;
-    ta.className = "field-input review-flag-textarea";
-    ta.rows = 3;
-    flagForm.append(ta);
-    const err = el("div", "account-error review-flag-error", "");
-    err.setAttribute("aria-live", "polite");
-    err.hidden = true;
-    flagForm.append(err);
-    const saveBtn = el("button", "btn btn-primary", "Save and next case");
-    saveBtn.type = "button";
-    saveBtn.addEventListener("click", () => {
-      const note = ta.value.trim();
-      if (!note) {
-        err.hidden = false;
-        err.textContent = "Tell us what's wrong before saving.";
-        ta.focus();
-        return;
-      }
+    const noteForm = buildReviewNoteForm(id, "Save and next case", (note) => {
       setReview(id, "flagged", note);
+      confirmToast(d);
       if (!context) return;
       advanceCase(id, context, { requireUndone: true });
     });
-    flagForm.append(saveBtn);
-    bar.append(flagForm);
+    bar.append(noteForm.form);
 
     wrongBtn.addEventListener("click", () => {
-      flagForm.hidden = !flagForm.hidden;
-      wrongBtn.setAttribute("aria-expanded", String(!flagForm.hidden));
-      if (!flagForm.hidden) ta.focus();
+      noteForm.form.hidden = !noteForm.form.hidden;
+      wrongBtn.setAttribute("aria-expanded", String(!noteForm.form.hidden));
+      if (!noteForm.form.hidden) noteForm.textarea.focus();
     });
   }
 
@@ -1149,13 +1253,15 @@ function reviewBar(d) {
     bar.append(el("div", "done-bar-pos", `Case ${idx + 1} of ${context.list.length} in ${TAB_LABELS[context.tab]}`));
   }
 
-  bar.append(el("div", "done-bar-hint", "Press N to skip, D for Looks right — next case."));
+  bar.append(el("div", "done-bar-hint", "D confirm · N skip"));
   return bar;
 }
 
-/* "n" = Skip to next, "d" = Looks right — next case. Ignored while typing
-   anywhere, or with a modifier held, so it never fights the reply
-   textarea. */
+/* "n" = Skip to next. "d" confirms — except on a needs-a-human case, where
+   ClearDraft deliberately did not decide: there, "d" records nothing and
+   just tells the clerk to pick an outcome below, so a reflexive keypress can
+   never silently clear an escalation. Ignored while typing anywhere, or with
+   a modifier held, so it never fights the reply textarea. */
 function initCaseKeyboardNav() {
   addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1174,10 +1280,17 @@ function initCaseKeyboardNav() {
     e.preventDefault();
     if (k === "n") {
       advanceCase(id, context, { requireUndone: false });
-    } else {
-      if (!isReviewed(id)) setReview(id, "confirmed");
-      advanceCase(id, context, { requireUndone: true });
+      return;
     }
+    if (verdictKind(d) === "review") {
+      toast("ClearDraft didn't decide this one — choose an outcome below.");
+      return;
+    }
+    if (!isReviewed(id)) {
+      setReview(id, "confirmed");
+      confirmToast(d);
+    }
+    advanceCase(id, context, { requireUndone: true });
   });
 }
 
@@ -2262,13 +2375,28 @@ function route() {
   window.scrollTo(0, 0);
 }
 
+/* action = { label, onClick }. Plain toasts keep the old timing and stay
+   inert (pointer-events: none), so a clerk can never accidentally click
+   through one. A toast carrying an action becomes clickable and lingers
+   longer, since it is now something to read and decide on, not just notice. */
 let toastTimer;
-function toast(msg) {
+function toast(msg, action) {
   const t = $("#toast");
-  t.textContent = msg;
+  t.replaceChildren(document.createTextNode(msg));
+  if (action) {
+    const btn = el("button", "toast-action", action.label);
+    btn.type = "button";
+    btn.addEventListener("click", () => {
+      clearTimeout(toastTimer);
+      t.dataset.show = "false";
+      action.onClick();
+    });
+    t.append(btn);
+  }
+  t.classList.toggle("toast-has-action", Boolean(action));
   t.dataset.show = "true";
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.dataset.show = "false"; }, 3200);
+  toastTimer = setTimeout(() => { t.dataset.show = "false"; }, action ? 6000 : 3200);
 }
 
 (async function boot() {
