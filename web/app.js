@@ -3297,8 +3297,10 @@ function setAddMailTab(tab) {
   const datasetSection = $("#addmail-dataset");
   if (datasetSection) datasetSection.hidden = tab !== "dataset";
   // "Scan a photo" — the panel itself is owned and populated by
-  // web/scan.js; this file only knows how to show/hide it, same as the
-  // dataset tab above.
+  // web/scan.js; this file only knows how to show/hide it and mark it
+  // selected, same as the dataset tab above.
+  const scanTab = $("#addmail-tab-scan");
+  if (scanTab) scanTab.setAttribute("aria-selected", String(tab === "scan"));
   const scanSection = $("#addmail-scan");
   if (scanSection) scanSection.hidden = tab !== "scan";
 }
@@ -3405,15 +3407,31 @@ function initPasteForm() {
    Throws the same { missingApi: true } / { detail } shapes
    submitProcessEmail throws; scan.js is responsible for displaying those. */
 window.clearDraftSubmitScan = async function clearDraftSubmitScan({ subject, body, files }) {
-  const fd = new FormData();
-  if (subject) fd.append("subject", subject);
-  fd.append("body", body || "");
-  for (const f of files || []) fd.append("files", f);
-  const data = await submitProcessEmail(fd);
-  const wasDuplicate = mergeMineResult(data);
-  persistMineIfLocal();
-  renderBoardView();
-  return { data, wasDuplicate };
+  // Same mutual-exclusion every other intake path respects (uploadFiles,
+  // submitPaste, dataset upload): one submission in flight at a time,
+  // across ALL of them, not just within scan.js's own confirm button —
+  // two intake paths racing to merge into MINE.board at once is exactly
+  // the kind of thing UPLOADING exists to prevent.
+  if (UPLOADING) throw { detail: "Another upload is already in progress. Wait for it to finish." };
+  setUploadingUI(true);
+  try {
+    const fd = new FormData();
+    if (subject) fd.append("subject", subject);
+    fd.append("body", body || "");
+    for (const f of files || []) fd.append("files", f);
+    const data = await submitProcessEmail(fd);
+    const wasDuplicate = mergeMineResult(data);
+    persistMineIfLocal();
+    // Any error/progress panel left over from an earlier "Drop .eml
+    // files" or "Paste an email" attempt on this same board view must not
+    // linger once a scan submission succeeds — same panels, same clear
+    // function every other successful intake path already relies on.
+    clearUploadPanels();
+    renderBoardView();
+    return { data, wasDuplicate };
+  } finally {
+    setUploadingUI(false);
+  }
 };
 
 /* ── Accounts ───────────────────────────────────────────────────

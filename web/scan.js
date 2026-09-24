@@ -45,7 +45,10 @@
     return n;
   };
 
-  const MAX_LONG_EDGE = 2000;
+  // 1568px: the long edge Anthropic's vision models downscale to
+  // server-side anyway, so sending anything longer only spends upload
+  // bytes and time without buying any extra reading quality.
+  const MAX_LONG_EDGE = 1568;
   const JPEG_QUALITY = 0.85;
   const MAX_FILES_PER_BATCH = 12; // a generous cap so one drop can't wedge the UI
   const PHOTO_CASES_KEY = "cleardraft.scan.photoCases.v1";
@@ -59,7 +62,7 @@
   /* One entry per photo the clerk has added this session (cleared on a
      successful submit). Shape:
        { id, thumbUrl, status: "reading"|"done"|"error", text, reason,
-         docType: null|"SI"|"BL"|"EMAIL" } */
+         truncated, docType: null|"SI"|"BL"|"EMAIL" } */
   let ITEMS = [];
   let NEXT_ID = 1;
   let BUSY = false; // a confirm submit is in flight
@@ -120,7 +123,7 @@
     if (!body || typeof body.text !== "string") {
       return { ok: false, reason: "Unexpected response from the server. Type the text yourself." };
     }
-    return { ok: true, text: body.text };
+    return { ok: true, text: body.text, truncated: Boolean(body.truncated) };
   }
 
   /* ── Reading heuristics ────────────────────────────────────────── */
@@ -136,6 +139,22 @@
     if (!lines.length) return true;
     const unreadable = lines.filter((l) => /\[unreadable\]/i.test(l)).length;
     return unreadable / lines.length >= 0.6;
+  }
+
+  /** The one warning message to show for an item, or null for none.
+   * Truncation (the photo had more text than the model's reply could hold
+   * — see adapters/model.py's TranscribeResult.truncated) takes priority:
+   * it is a fact about the ORIGINAL reading that editing the text can't
+   * change, unlike the unreadable check below, which is recomputed live
+   * as the clerk types. */
+  function warningMessage(item) {
+    if (item.truncated) {
+      return "This photo had a lot of text; the end may be missing. Check the last lines.";
+    }
+    if (looksUnreadable(item.text)) {
+      return "We couldn't read much of this photo. Try a sharper, flatter, well-lit photo.";
+    }
+    return null;
   }
 
   /* ── localStorage: which cases came from a photo ──────────────────
@@ -221,7 +240,14 @@
 
   function itemStatusLine(item) {
     if (item.status === "reading") return "Reading…";
-    if (item.status === "error") return `Could not read this photo — ${item.reason || "try again"}.`;
+    if (item.status === "error") {
+      // Server/network reasons are already full sentences with their own
+      // trailing period (e.g. api/_ocr.py's "...Type or paste the text
+      // instead."). Strip a trailing "." before appending ours so the
+      // line never ends in "..".
+      const reason = (item.reason || "try again").replace(/\.$/, "");
+      return `Could not read this photo — ${reason}.`;
+    }
     return "Read. Check it against the photo below.";
   }
 
@@ -258,15 +284,15 @@
       ta.setAttribute("aria-describedby", `${textareaId(item.id)}-note`);
       ta.addEventListener("input", () => {
         item.text = ta.value;
-        warnBox.hidden = !looksUnreadable(item.text);
+        const msg = warningMessage(item);
+        warnBox.textContent = msg || "";
+        warnBox.hidden = !msg;
       });
       body.append(ta);
 
-      const warnBox = el(
-        "div", "scan-warning",
-        "We couldn't read much of this photo. Try a sharper, flatter, well-lit photo."
-      );
-      warnBox.hidden = !looksUnreadable(item.text);
+      const initialWarning = warningMessage(item);
+      const warnBox = el("div", "scan-warning", initialWarning || "");
+      warnBox.hidden = !initialWarning;
       warnBox.setAttribute("role", "status");
       body.append(warnBox);
 
@@ -368,6 +394,7 @@
       status: "reading",
       text: "",
       reason: null,
+      truncated: false,
       docType: null,
     }));
     ITEMS = ITEMS.concat(newItems);
@@ -386,6 +413,7 @@
         if (result.ok) {
           item.status = "done";
           item.text = result.text;
+          item.truncated = Boolean(result.truncated);
         } else {
           item.status = "error";
           item.reason = result.reason;
@@ -432,6 +460,12 @@
         }
         return;
       }
+    }
+    if (ITEMS.every((it) => !(it.text || "").trim())) {
+      showConfirmError("Type or fix the text first.");
+      const firstTa = document.getElementById(textareaId(ITEMS[0].id));
+      if (firstTa) firstTa.focus();
+      return;
     }
 
     const siText = ITEMS.filter((it) => it.docType === "SI").map((it) => (it.text || "").trim()).filter(Boolean);

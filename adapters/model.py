@@ -79,6 +79,20 @@ class ModelUnavailable(RuntimeError):
     """
 
 
+class ImageRejected(RuntimeError):
+    """Raised by transcribe_image when the model itself rejected the image
+    (too large once base64-encoded, a corrupt or unsupported image, etc.) -
+    a 400-shaped problem with THIS photo, distinct from ModelUnavailable's
+    "the AI service is off/unreachable" 503. Never retried: the SDK's
+    BadRequestError for a bad image fails identically on a second attempt.
+
+    api/_ocr.py catches this separately and answers 400 {"error":
+    "image_rejected", ...} rather than the 503 it gives for
+    ModelUnavailable, so the clerk sees "this photo couldn't be read" and
+    not "the AI is off right now" - two different, actionable messages.
+    """
+
+
 def _load_dotenv() -> None:
     """Read .env into the environment if present. No extra dependency.
 
@@ -272,7 +286,21 @@ _TRANSCRIBE_PROMPT = (
 )
 
 
-def transcribe_image(image_bytes: bytes, media_type: str) -> str:
+@dataclass
+class TranscribeResult:
+    """transcribe_image's return shape."""
+
+    text: str
+    #: True when the model's reply hit max_tokens (stop_reason ==
+    #: "max_tokens") - the photo had more text than fit in one reply, so
+    #: the transcription may be cut off mid-document. Surfaced by
+    #: api/_ocr.py as "truncated": true and shown to the clerk by
+    #: web/scan.js as a warning to check the last lines, rather than
+    #: silently handing back a partial reading.
+    truncated: bool = False
+
+
+def transcribe_image(image_bytes: bytes, media_type: str) -> TranscribeResult:
     """Read every line of text off a photo, verbatim. Never corrects,
     translates, summarises or invents anything; illegible parts come back
     as "[unreadable]".
@@ -292,9 +320,14 @@ def transcribe_image(image_bytes: bytes, media_type: str) -> str:
     except via the shared decrement below), constructs the client the same
     way (same MODEL, same call_timeout capped to the budget's remaining
     deadline, max_retries=0), counts STATS.calls/input_tokens/output_tokens
-    the same way, and raises ModelUnavailable on any failure - callers must
-    treat that as "cannot read this photo right now", never as a guess at
-    what it says.
+    the same way.
+
+    Raises ImageRejected when the model rejected THIS photo (too large
+    once base64-encoded, corrupt, unsupported) - a 400-shaped problem with
+    the image, never retried. Raises ModelUnavailable for everything else
+    (no key, switch off, budget exhausted, a transient failure after one
+    retry) - callers must treat that as "cannot read any photo right now",
+    never as a guess at what this one says.
     """
     if not available():
         raise ModelUnavailable("ANTHROPIC_API_KEY is not configured")
@@ -356,9 +389,20 @@ def transcribe_image(image_bytes: bytes, media_type: str) -> str:
             text = "".join(
                 getattr(block, "text", "") for block in getattr(resp, "content", [])
             )
-            return text.strip()
+            truncated = getattr(resp, "stop_reason", None) == "max_tokens"
+            return TranscribeResult(text=text.strip(), truncated=truncated)
+        except anthropic.BadRequestError as exc:
+            # The image itself was rejected (too large once base64-encoded,
+            # corrupt, an unsupported format the API doesn't recognise) -
+            # not a service outage, and not transient: the same bad image
+            # fails identically on a second attempt, so this is never
+            # retried. Distinct from the ModelUnavailable this loop raises
+            # for everything else, so api/_ocr.py can answer "this photo
+            # couldn't be read" (400) instead of "the AI is off" (503).
+            STATS.failures += 1
+            raise ImageRejected(f"image rejected by the model: {exc}") from exc
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
-                anthropic.BadRequestError, anthropic.NotFoundError) as exc:
+                anthropic.NotFoundError) as exc:
             # Not transient - see complete_json's identical comment.
             last = exc
             break
