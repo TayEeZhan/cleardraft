@@ -11,6 +11,20 @@ from core.variance import comparison_variance, explain_difference
         ("shipper", "Ocean Paper Co Ltd", "OCEAN PAPER COMPANY LIMITED", "suffix_abbreviation"),
         ("notify_party", "Global Paper Trading Ltd", "TRADING GLOBAL PAPER LTD", "token_reorder"),
         ("consignee", "Pacific Pulp Sdn Bhd, Malaysia", "PACIFIC PULP SDN BHD", "country_suffix"),
+        ("shipper", "Smith & Sons Trading", "SMITH AND SONS TRADING", "ampersand_and"),
+        ("consignee", "Ocean + Paper Trading", "OCEAN AND PAPER TRADING", "ampersand_and"),
+        ("port_of_loading", "PORT KLANG", "PORT KELANG", "port_alias"),
+        ("port_of_discharge", "PORT KLANG, MALAYSIA", "MYPKG", "port_alias"),
+        ("port_of_loading", "SINGAPORE", "SGSIN", "port_alias"),
+        ("port_of_discharge", "HO CHI MINH CITY", "HCMC", "port_alias"),
+        ("port_of_loading", "SAIGON", "VNSGN", "port_alias"),
+        ("port_of_discharge", "KARACHI", "PKKHI", "port_alias"),
+        ("port_of_loading", "NANTONG", "CNNTG", "port_alias"),
+        ("port_of_discharge", "SHANGHAI", "CNSHA", "port_alias"),
+        ("consignee", "Pacific Pulp Sdn Bhd, UAE", "PACIFIC PULP SDN BHD, UNITED ARAB EMIRATES", "country_variant"),
+        ("shipper", "Karachi Textiles, Pak", "KARACHI TEXTILES, PAKISTAN", "country_variant"),
+        ("notify_party", "Ocean Traders, SG", "OCEAN TRADERS, SINGAPORE", "country_variant"),
+        ("consignee", "Pacific Pulp Sdn Bhd, MY", "PACIFIC PULP SDN BHD, MALAYSIA", "country_variant"),
     ],
 )
 def test_explains_controlled_formatting_variance(field, si, bl, reason):
@@ -25,6 +39,12 @@ def test_explains_controlled_formatting_variance(field, si, bl, reason):
         ("consignee", "ALPHA PAPER LTD", "BETA PAPER LTD"),
         ("port_of_loading", "SINGAPORE", "SHANGHAI"),
         ("shipper", "", "ALPHA LTD"),
+        # Different ports, both in the UAE - must never collapse to the same
+        # hint even though the country suffix matches.
+        ("port_of_loading", "DUBAI", "JEBEL ALI"),
+        ("port_of_discharge", "DUBAI, UAE", "JEBEL ALI, UAE"),
+        # "&"/"+" resolved to "AND" is not the ONLY difference here.
+        ("shipper", "Smith & Sons Trading", "SMITH AND DAUGHTERS TRADING"),
     ],
 )
 def test_does_not_explain_substantive_or_numeric_differences(field, si, bl):

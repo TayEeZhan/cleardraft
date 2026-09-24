@@ -795,6 +795,9 @@ const VARIANCE_LABELS = {
   suffix_abbreviation: "Possible company-suffix abbreviation",
   token_reorder: "Same words, different order",
   country_suffix: "Possible country suffix",
+  ampersand_and: "\"&\" vs \"AND\"",
+  port_alias: "Same port under another name - check and mark as same if correct",
+  country_variant: "Possible country name/abbreviation variant",
 };
 function varianceLabel(reason) { return VARIANCE_LABELS[reason] || "Possible formatting variation"; }
 
