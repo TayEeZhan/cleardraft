@@ -45,7 +45,38 @@ class LocalInbox:
                 yield Email.from_json(json.load(fh))
 
     def attachment_path(self, rel: str) -> str:
-        return os.path.join(self.root, rel)
+        """Resolve `rel` against this inbox's root, CONFINED to that root.
+
+        `rel` comes straight out of an inbox/*.json's own `attachments`
+        list - for the organiser's bundle that is trustworthy, but
+        `api/_dataset.py` builds a LocalInbox over an untrusted upload, and
+        nothing stops a hostile email record from naming an absolute path or
+        a `..` escape (`os.path.join` happily returns an absolute `rel`
+        unchanged, ignoring `root` entirely). Every caller of this method
+        goes through `extract()`, which reads and can RETURN the file's text
+        in the API response - so an unconfined join here is a read-anything
+        vulnerability, not just a traversal curiosity.
+
+        Confinement is real-path based (resolves symlinks/`..`) and uses
+        `os.path.commonpath`, not a string prefix check, which a crafted
+        sibling name (e.g. `root-evil/`) can defeat. A path that resolves
+        outside `root` - or that cannot even be compared to it (Windows
+        raises ValueError for paths on different drives) - returns a path
+        that does not exist and has no extension `core.parsers.for_path`
+        recognises, so `extract()` reports it unreadable/OTHER without ever
+        opening anything outside `root`.
+        """
+        root = os.path.realpath(self.root)
+        candidate = os.path.realpath(os.path.join(root, rel))
+        try:
+            confined = os.path.commonpath([root, candidate]) == root
+        except ValueError:
+            # e.g. comparing "C:\..." to "D:\..." on Windows - definitely
+            # not confined.
+            confined = False
+        if not confined:
+            return os.path.join(root, "attachments", "_outside_root_")
+        return candidate
 
     def __len__(self) -> int:
         return sum(1 for n in os.listdir(self.inbox_dir) if n.endswith(".json"))

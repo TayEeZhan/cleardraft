@@ -20,13 +20,30 @@ let UPLOADING = false;
 
 /* "Uploaded: <name>" — the company's own dataset (.zip), processed live by
    POST /api/process-dataset. Same board/detail shapes as MINE/DATA, plus
-   `name` (the zip's filename, shown in the source switch) and `submission`
-   (the server's own organiser-format export, used verbatim by the
-   Submission JSON export for this source — see initExportMenu()). A
-   brand-new visitor sees no uploaded source at all until they upload one:
-   loadUploaded() returns this same empty shape when nothing is saved. */
+   `name` (the zip's filename, shown in the source switch), `datasetKey`
+   (a fresh random id minted on every successful upload — see reviewKey()
+   below, uploadDataset()) and `submission` (the server's own
+   organiser-format export, used verbatim by the Submission JSON export for
+   this source — see initExportMenu()). A brand-new visitor sees no
+   uploaded source at all until they upload one: loadUploaded() returns
+   this same empty shape when nothing is saved. */
 function emptyUploaded() {
-  return { name: null, board: [], detail: {}, submission: {}, stats: null, seconds: null, model_calls: null };
+  return {
+    name: null, datasetKey: null, board: [], detail: {}, submission: {},
+    stats: null, seconds: null, model_calls: null,
+  };
+}
+
+/* A short, unpredictable id for "this particular upload" — not the zip's
+   name (two uploads can share a filename with different content, and the
+   SAME file re-uploaded twice must still count as two separate datasets)
+   and not a content hash (expensive to compute client-side for a large
+   zip). Used only to namespace review keys (reviewKey()) so a second
+   upload whose email ids happen to collide with the first always starts
+   unreviewed. */
+function newDatasetKey() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function loadUploaded() {
@@ -139,8 +156,20 @@ function loadReviews() {
 }
 let REVIEWS = loadReviews();
 
+// Shown at most once per page load — a clerk clicking through several
+// reviews in a row with a full quota must not get the same toast stacked
+// on every single click.
+let REVIEWS_SAVE_WARNED = false;
+
 function saveReviews() {
-  try { localStorage.setItem("cleardraft.reviews.v1", JSON.stringify(REVIEWS)); } catch { /* per-browser convenience only */ }
+  try {
+    localStorage.setItem("cleardraft.reviews.v1", JSON.stringify(REVIEWS));
+  } catch {
+    if (!REVIEWS_SAVE_WARNED) {
+      REVIEWS_SAVE_WARNED = true;
+      toast("Couldn't save reviews in this browser (storage full)");
+    }
+  }
 }
 
 /* One-time migration from the old "Done" list: every id there becomes a
@@ -169,14 +198,50 @@ migrateDoneList();
    (see navigateToCase() below for why that can't just be a direct focus() call). */
 let FOCUS_CASE_HEADING = false;
 
-/* Review verdicts are keyed by email_id, and email_ids can collide between
-   the uploaded dataset and the sample inbox (both may have "email_004") —
-   an uploaded dataset runs the same batch pipeline over the organiser's own
-   id scheme. `mine`'s ids are always server-generated ("up_" + a content
-   hash) and never collide with anything, so only "uploaded" needs its own
-   namespace; "mine" and "sample" keep their original, unprefixed keys so
-   reviews saved before this feature existed keep working unchanged. */
-function reviewKey(source, id) { return source === "uploaded" ? `uploaded:${id}` : id; }
+/* Review verdicts are keyed by email_id, and email_ids can collide both
+   between the uploaded dataset and the sample inbox (both may have
+   "email_004" — an uploaded dataset runs the same batch pipeline over the
+   organiser's own id scheme) AND between two different uploads in the same
+   session (re-uploading the same zip, or uploading a different one that
+   happens to reuse ids). So an "uploaded" key carries the CURRENT upload's
+   own datasetKey too: "uploaded:<datasetKey>:<email_id>" — a fresh
+   datasetKey is minted on every successful upload (uploadDataset()), so a
+   second upload's cases always start unreviewed even when their ids match
+   the first upload's exactly. `mine`'s ids are always server-generated
+   ("up_" + a content hash) and never collide with anything, so only
+   "uploaded" needs a namespace at all; "mine" and "sample" keep their
+   original, unprefixed keys so reviews saved before this feature existed
+   keep working unchanged. */
+const UPLOADED_REVIEW_PREFIX = "uploaded:";
+
+function reviewKey(source, id) {
+  if (source !== "uploaded") return id;
+  return `${UPLOADED_REVIEW_PREFIX}${UPLOADED.datasetKey || "-"}:${id}`;
+}
+
+/* The inverse of reviewKey() for an "uploaded:..." storage key — used only
+   by the Accuracy page's cross-source flagged/problem lists, which have to
+   read every REVIEWS key back out without already knowing its source. */
+function parseReviewKey(key) {
+  if (!key.startsWith(UPLOADED_REVIEW_PREFIX)) return { source: null, id: key };
+  const rest = key.slice(UPLOADED_REVIEW_PREFIX.length);
+  const sep = rest.indexOf(":");
+  if (sep === -1) return { source: "uploaded", datasetKey: null, id: rest };
+  return { source: "uploaded", datasetKey: rest.slice(0, sep), id: rest.slice(sep + 1) };
+}
+
+/* Drops every review recorded against ANY uploaded dataset — called both
+   when a dataset is explicitly removed and right before a fresh upload
+   replaces it, so orphaned reviews from a previous upload (unreachable
+   anyway, since they were keyed to a datasetKey nothing points at any
+   more) don't just pile up quietly in localStorage all session. */
+function purgeUploadedReviews() {
+  let changed = false;
+  for (const key of Object.keys(REVIEWS)) {
+    if (key.startsWith(UPLOADED_REVIEW_PREFIX)) { delete REVIEWS[key]; changed = true; }
+  }
+  if (changed) saveReviews();
+}
 
 function getReview(source, id) { return REVIEWS[reviewKey(source, id)] || null; }
 function isReviewed(source, id) { return Boolean(REVIEWS[reviewKey(source, id)]); }
@@ -2201,14 +2266,11 @@ function renderReviewsPanel(host) {
   const problemsFound = [];
   for (const key of ids) {
     const r = REVIEWS[key];
-    // Storage keys are namespaced per source (see reviewKey()) so an
-    // uploaded dataset's ids can't collide with the sample inbox's — strip
-    // that back off here, but remember which source it came from so the
-    // link below can still resolve (and route to) the right case.
-    const uploadedPrefix = "uploaded:";
-    const fromUploaded = key.startsWith(uploadedPrefix);
-    const id = fromUploaded ? key.slice(uploadedPrefix.length) : key;
-    const source = fromUploaded ? "uploaded" : null;
+    // Storage keys are namespaced per source, and an uploaded dataset's
+    // per datasetKey (see reviewKey()) — parse that back off here, but
+    // remember which source it came from so the link below can still
+    // resolve (and route to) the right case.
+    const { source, id } = parseReviewKey(key);
     if (r.verdict === "confirmed") confirmed++;
     else if (r.verdict === "flagged") { flagged++; flaggedList.push({ id, source, note: r.note }); }
     else if (r.verdict === "done" && r.note && r.note.startsWith("problem:")) {
@@ -3020,7 +3082,9 @@ async function uploadDataset(file) {
   const progress = $("#dataset-upload-progress");
   if (progress) progress.hidden = true;
 
-  // Same "no live backend" detection as submitProcessEmail().
+  // Same "no live backend" detection as submitProcessEmail() — a static
+  // server with no API answers these three the way it answers any
+  // unhandled POST, never with our own JSON error shape.
   if (resp.status === 404 || resp.status === 405 || resp.status === 501) {
     showUploadApiMissing();
     setUploadingUI(false);
@@ -3028,14 +3092,26 @@ async function uploadDataset(file) {
   }
   if (!resp.ok) {
     const ct = resp.headers.get("content-type") || "";
-    let detail = `HTTP ${resp.status}`;
+    let detail;
     if (ct.includes("json")) {
+      // Our own clean {error, detail} shape (api/_dataset.py's _error()),
+      // whatever the status - 400 for a rejected zip, 413 for a result
+      // too large to return, etc.
       const j = await resp.json().catch(() => ({}));
-      detail = j.detail || j.error || detail;
-    } else {
-      showUploadApiMissing();
-      setUploadingUI(false);
-      return;
+      detail = j.detail || j.error || null;
+    }
+    if (!detail && resp.status === 413) {
+      // Vercel's own platform limit (4.5 MB) can reject the request before
+      // it ever reaches api/_dataset.py, with a plain, non-JSON body - the
+      // 4 MB app-level cap should catch this first, but this is the
+      // friendly fallback when it doesn't.
+      detail = "The zip is too large to upload (4 MB max). Try a smaller dataset.";
+    }
+    if (!detail) {
+      // Any other failure with a body we can't read as our own error shape
+      // (a 500, a proxy error page, ...) - never claim the API is simply
+      // missing when it clearly answered, just less specifically than usual.
+      detail = `Upload failed (HTTP ${resp.status}). Try again, or use a smaller zip.`;
     }
     showUploadErrors([{ name: file.name, detail }]);
     setUploadingUI(false);
@@ -3043,8 +3119,14 @@ async function uploadDataset(file) {
   }
 
   const data = await resp.json();
+  // A fresh, unpredictable datasetKey per upload (see newDatasetKey()) —
+  // together with purging every review namespaced to the PREVIOUS
+  // datasetKey, this guarantees a second upload's cases start unreviewed
+  // even when their email ids exactly match the first upload's.
+  purgeUploadedReviews();
   UPLOADED = {
     name: (data.source && data.source.name) || file.name.replace(/\.zip$/i, ""),
+    datasetKey: newDatasetKey(),
     board: data.board || [],
     detail: data.details || {},
     submission: data.submission || {},
@@ -3095,6 +3177,7 @@ function initDatasetUpload() {
       if (!confirm(`Remove the uploaded dataset "${UPLOADED.name}"? This only removes it from this browser — nothing was ever stored on the server.`)) return;
       UPLOADED = emptyUploaded();
       saveUploaded();
+      purgeUploadedReviews();
       if (SRC === "uploaded") setSourceKey("mine");
       renderDatasetResult();
       renderBoardView();

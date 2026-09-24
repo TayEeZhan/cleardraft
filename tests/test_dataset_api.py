@@ -278,3 +278,155 @@ def test_full_corpus_matches_batch_pipeline():
     reference_mismatches = sum(1 for row in reference["board"] if row["status"] == "MISMATCH")
 
     assert live_mismatches == reference_mismatches
+
+
+# ---------------------------------------------------------------------------
+# Security: a hostile email record naming an attachment path outside the
+# extracted bundle (arbitrary server file read), and malformed zip content
+# that must never turn into a 500. See adapters/inbox.py's
+# LocalInbox.attachment_path and this file's _safe_attachment_entries /
+# _validate_email_record for the two layers of defence.
+# ---------------------------------------------------------------------------
+_SECRET_TEXT = "TOP SECRET LINE 42 - if this appears anywhere below, the fix failed"
+
+
+def _zip_with_email(email: dict, extra_members: "dict[str, object]" = None) -> bytes:
+    """One inbox/e1.json (whatever `email` is) plus a real, harmless
+    attachments/x_SI.d/f.txt member the record's own attachments list can
+    reference relative to - the same shape a hostile record would use to
+    build a "../.." escape."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("inbox/e1.json", json.dumps(email))
+        zf.writestr("attachments/x_SI.d/f.txt", "harmless placeholder")
+        for name, content in (extra_members or {}).items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+def _base_email(attachments) -> dict:
+    return {
+        "email_id": "e1",
+        "subject": "Please compare the attached SI and draft BL and confirm",
+        "from": "clerk@example.com",
+        "body": "Please check the attached SI against the draft BL and confirm.",
+        "attachments": attachments,
+    }
+
+
+def test_absolute_attachment_path_does_not_leak_file_contents(tmp_path):
+    secret = tmp_path / "outside_secret.txt"
+    secret.write_text(_SECRET_TEXT + "\nShipper: ACME\n", encoding="utf-8")
+
+    email = _base_email([str(secret)])
+    resp = _post(_zip_with_email(email))
+    assert resp.status_code == 200
+    assert _SECRET_TEXT not in resp.text
+    detail = resp.json()["details"]["e1"]
+    # The bogus attachment reference simply never resolved to a document -
+    # no SI/BL pair, so nothing was compared, and definitely nothing leaked.
+    assert detail["documents"]["si"] is None
+    assert detail["documents"]["bl"] is None
+
+
+def test_dotdot_traversal_attachment_path_does_not_leak_file_contents(tmp_path):
+    secret = tmp_path / "cd_secret_probe.txt"
+    secret.write_text(_SECRET_TEXT + "\nnot a shipping doc\n", encoding="utf-8")
+
+    # Climb from attachments/x_SI.d/ back up past the extracted tmp dir
+    # entirely, into the real filesystem, then down into tmp_path.
+    traversal = "attachments/x_SI.d/" + "../" * 12 + str(secret).replace("\\", "/").lstrip("/")
+    email = _base_email([traversal])
+    resp = _post(_zip_with_email(email))
+    assert resp.status_code == 200
+    assert _SECRET_TEXT not in resp.text
+
+
+def test_windows_style_traversal_variant_does_not_leak_file_contents(tmp_path):
+    secret = tmp_path / "cd_secret_probe2.txt"
+    secret.write_text(_SECRET_TEXT + "\n", encoding="utf-8")
+    traversal = "attachments/x_SI.d/../../../" + str(secret).replace("\\", "/").lstrip("/")
+    email = _base_email([traversal])
+    resp = _post(_zip_with_email(email))
+    assert resp.status_code == 200
+    assert _SECRET_TEXT not in resp.text
+
+
+def test_non_string_and_blank_attachment_entries_are_dropped_not_fatal():
+    email = _base_email([123, "", "   ", None, "attachments/x_SI.d/f.txt"])
+    resp = _post(_zip_with_email(email))
+    assert resp.status_code == 200
+
+
+def test_malformed_inbox_json_is_400_not_500():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("inbox/e1.json", "{not valid json")
+    resp = _post(buf.getvalue())
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_email"
+
+
+def test_non_utf8_inbox_json_is_400_not_500():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("inbox/e1.json", b"\xff\xfe\x00\x01")
+    resp = _post(buf.getvalue())
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_email"
+
+
+def test_json_array_instead_of_object_is_400_not_500():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("inbox/e1.json", "[1, 2, 3]")
+    resp = _post(buf.getvalue())
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_email"
+
+
+def test_email_json_missing_email_id_is_400_not_500():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("inbox/e1.json", json.dumps({"subject": "no id field here"}))
+    resp = _post(buf.getvalue())
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_email"
+
+
+def test_file_directory_name_clash_while_extracting_is_400_not_500():
+    email = _base_email(["attachments/a"])
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("inbox/e1.json", json.dumps(email))
+        zf.writestr("attachments/a", "a plain file")
+        zf.writestr("attachments/a/b", "now a would need to be a directory")
+    resp = _post(buf.getvalue())
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_zip"
+
+
+def test_encrypted_zip_member_is_400_not_500():
+    """A member flagged encrypted (no password supplied anywhere) must never
+    reach the pipeline as a 500 - whether zipfile itself refuses to open it
+    (-> invalid_zip) or the flag alone doesn't stop the read and the
+    resulting content just fails email validation (-> invalid_email), both
+    are the same safe outcome: a clean 400, never a crash."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zi = zipfile.ZipInfo("inbox/e1.json")
+        zi.flag_bits |= 0x1  # mark as encrypted; no password is supplied anywhere
+        zf.writestr(zi, "{}")
+    resp = _post(buf.getvalue())
+    assert resp.status_code == 400
+    assert resp.json()["error"] in ("invalid_zip", "invalid_email")
+
+
+def test_model_calls_are_reported_from_a_per_request_counter():
+    """Even with the model tier off (calls == 0 here), the reported count
+    must come from the request's own budget delta, not process-wide
+    adapters.model.STATS - see api/_dataset.py's _run_pipeline docstring."""
+    ids = ["email_001"]
+    resp = _post(_build_zip(ids))
+    assert resp.status_code == 200
+    assert resp.json()["source"]["model_calls"] == 0
