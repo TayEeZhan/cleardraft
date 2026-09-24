@@ -18,10 +18,10 @@ threshold risks swallowing a real defect. We do not use one.
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from core.aliases import is_blank
 from core.types import CompareField
+from core.units import to_kilograms
 
 #: entity punctuation that varies across renderers but never carries meaning:
 #: "MOORIM SP CO., LTD" vs "MOORIM SP CO LTD". Strip it everywhere, not just
@@ -66,22 +66,6 @@ _SIZE_BEFORE_MULTIPLIER = re.compile(r"[A-Za-z']\s*[xX×]\s*\d")
 #: plain noise ("2 X 40 *"), and treating it as one would misread that as a
 #: second group instead of trailing punctuation on the first.
 _COUNT_TERM = re.compile(r"(\d+)\s*[xX×]\s*(?=\d{2}\s*(?:'|FT|[A-Za-z]))")
-#: "21.577" is twenty-one thousand in European notation, not 21.577. Matches
-#: 1-3 leading digits followed by one or more dot-delimited groups of exactly 3.
-_DOT_THOUSANDS = re.compile(r"^\d{1,3}(?:\.\d{3})+$")
-_COMMA_THOUSANDS = re.compile(r"^\d{1,3}(?:,\d{3})+$")
-_WEIGHT = re.compile(r"^(?P<number>\d+(?:[.,]\d+)*)\s*(?P<unit>[A-Za-z]+)?$")
-_WEIGHT_MULTIPLIERS = {
-    "KG": Decimal("1"),
-    "KGS": Decimal("1"),
-    "KGM": Decimal("1"),
-    "MT": Decimal("1000"),
-    "MTS": Decimal("1000"),
-    "TON": Decimal("1000"),
-    "TONNE": Decimal("1000"),
-    "LB": Decimal("0.45359237"),
-    "LBS": Decimal("0.45359237"),
-}
 
 
 def _as_text(value: object) -> "str | None":
@@ -213,59 +197,20 @@ def normalise_container_count(value: str) -> "int | None":
     return int(m.group())
 
 
-def _weight_number(text: str) -> "Decimal | None":
-    """Parse one locale-formatted number without discarding separators."""
-    if "," in text and "." in text:
-        # Whichever separator appears last is decimal; the other is thousands.
-        if text.rfind(".") > text.rfind(","):
-            text = text.replace(",", "")
-        else:
-            text = text.replace(".", "").replace(",", ".")
-    elif _DOT_THOUSANDS.fullmatch(text):
-        text = text.replace(".", "")
-    elif _COMMA_THOUSANDS.fullmatch(text):
-        text = text.replace(",", "")
-    elif "," in text:
-        if text.count(",") != 1:
-            return None
-        text = text.replace(",", ".")
-    elif text.count(".") > 1:
-        return None
-    try:
-        return Decimal(text)
-    except (InvalidOperation, ValueError, OverflowError):
-        return None
-
-
 def normalise_weight(value: object) -> "int | None":
     """gross_weight_kg.
 
-    Parse the numeric value and its unit as one value. Supported units are
-    converted explicitly to kilograms; a bare value remains kilograms because
-    the .xlsx renderer emits bare numeric cells. Unknown units fail closed to
-    None, which core.compare turns into an undecidable row for human review.
+    Delegates to core.units.to_kilograms, which parses the numeric value and
+    unit together, converts supported units explicitly, and fails closed for
+    unsupported formats. A bare value remains kilograms because the .xlsx
+    renderer emits bare numeric cells.
 
-    A decimal point must survive stripping. Deleting it turns "21,577.00 KGS"
-    - a very common real-world rendering - into 2157700, which is a silent
-    100x error that guarantees a false mismatch. Weights here differ by at
-    least 500 kg when they genuinely differ, so rounding to the nearest
-    kilogram is safe and both sides get the same treatment.
+    A decimal point must survive parsing. Deleting it turns "21,577.00 KGS" - a very
+    common real-world rendering - into 2157700, a silent 100x error that guarantees a
+    false mismatch. Weights here differ by at least 500 kg when they genuinely differ,
+    so rounding to the nearest kilogram is safe and both sides get the same treatment.
     """
     text = _as_text(value)
     if text is None:
         return None
-    match = _WEIGHT.fullmatch(text)
-    if match is None:
-        return None
-    number = _weight_number(match.group("number"))
-    if number is None:
-        return None
-    unit = (match.group("unit") or "KG").upper()
-    multiplier = _WEIGHT_MULTIPLIERS.get(unit)
-    if multiplier is None:
-        return None
-    try:
-        kilograms = number * multiplier
-        return int(kilograms.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-    except InvalidOperation:
-        return None
+    return to_kilograms(text)

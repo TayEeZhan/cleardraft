@@ -794,6 +794,7 @@ function referenceForSource(id) {
 
 function stateOf(c) {
   if (c.undecidable) return "unknown";
+  if (c.matched && c.unit_note) return "converted";
   return c.matched ? "match" : "mismatch";
 }
 
@@ -1647,8 +1648,12 @@ function seamTable(d, ctx = {}) {
     // resolved, or a row that arrived already matched via a pair applied at
     // check time — both land in the "Marked as same" group, never among
     // ordinary matches.
+    // "converted" (same weight, different unit) groups and orders exactly
+    // like an ordinary match — it only gets its own row styling via
+    // data-state in renderRow, not its own section or ordering.
+    const groupKey = st === "converted" ? "match" : st;
     if (coveredRows[c.field]) groups.covered.push(c);
-    else groups[st].push(c);
+    else groups[groupKey].push(c);
   }
 
   function renderRow(c, coveredPairId) {
@@ -1663,6 +1668,13 @@ function seamTable(d, ctx = {}) {
     }
     row.append(label);
     const actions = el("div", "f-label-actions");
+
+    if (c.unit_note) {
+      const kgText = c.unit_kg == null ? "" : ` · ${Number(c.unit_kg).toLocaleString("en-US")} kg`;
+      const unitChip = el("span", "chip chip-quiet", "units differ — same weight");
+      unitChip.title = `${c.unit_note}${kgText}`;
+      actions.append(unitChip);
+    }
 
     for (const side of ["si", "bl"]) {
       const cell = el("div", `f-val f-${side}`);

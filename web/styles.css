@@ -23,6 +23,12 @@
   --review-bg:  #EFEAF8;
   --marked:     #14395E;
   --marked-bg:  #E9EEF5;
+  /* Same weight, different unit — resolved (not a defect), but distinct from
+     an ordinary match so a clerk can still see why the numbers on the page
+     don't look identical. Calm teal: not the mismatch red, not the marked
+     navy, not the review purple. */
+  --converted:    #0E7C86;
+  --converted-bg: #E6F3F4;
 
   --display: 'Archivo', system-ui, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
@@ -332,6 +338,20 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 .seam-row[data-state="unknown"] { background: var(--review-bg); }
 .seam-row[data-state="unknown"] .seam::before { background: repeating-linear-gradient(to bottom, var(--review) 0 3px, transparent 3px 7px); }
 .seam-row[data-state="unknown"] .f-label { color: var(--review); font-weight: 600; }
+
+/* Same weight, written in different units ("22 MT" vs "22,000 KG") — resolved,
+   not a defect, but worth a glance: calm, and deliberately not the mismatch
+   red. Grouped/ordered with ordinary matches (see seamTable in app.js); only
+   this row styling and the "units differ" chip set it apart. */
+.seam-row[data-state="converted"] { background: var(--converted-bg); }
+.seam-row[data-state="converted"] .seam::before { background: var(--converted); }
+.seam-row[data-state="converted"] .seam::after {
+  content: "\2248"; position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--mono); font-size: 14px; font-weight: 600;
+  color: var(--converted); background: var(--converted-bg); padding: 0 3px;
+}
+.seam-row[data-state="converted"] .f-label { color: var(--converted); font-weight: 600; }
 
 @media (prefers-reduced-motion: reduce) { .f-val { transition: none; } }
 
