@@ -319,9 +319,10 @@ gated on `current_user()` the same way `api/_accounts.py` gates mail;
 `compare()` call sites. The web UI (`web/app.js`) adds a "Mark as same"
 button on an eligible mismatch row — on an inbox discrepancy row and on the
 "Check a pair" result alike — with an inline (never `window.confirm`) confirm
-step, and a "Matched via a pair you approved" chip with Undo on a row that
-came back `learned: true`. Every marked row is folded into a highlighted
-"Marked as same (n)" group. Reached from a top-bar shortcut (a count badge,
+step and an optional reason. Every covered row — marked just now, or one
+that came back `learned: true` from the check — is folded into a highlighted
+"Marked as same (n)" group, labelled "Marked as same by you · date · from
+<reference> · reason" with Undo and Edit. Reached from a top-bar shortcut (a count badge,
 label shortened to "Marked" under ~860px) and from the account menu, a
 dedicated `#/learned` page (search, field filter, "N of 500" usage, edit,
 remove/restore, `#/learned/<id>` deep link) is the one place to manage saved
