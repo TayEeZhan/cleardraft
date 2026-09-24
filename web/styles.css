@@ -905,7 +905,9 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 
 @media (max-width: 520px) {
   .triage-row { flex-direction: column; align-items: stretch; }
-  .triage-progress-wrap { min-width: 0; }
+  /* flex: none - in a column, the desktop 200px flex-basis becomes a 200px
+     HEIGHT and leaves a tall empty gap around the bar. */
+  .triage-progress-wrap { min-width: 0; flex: none; }
 }
 
 /* "k left" under a tab's count — only present once that tab has at least

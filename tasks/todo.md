@@ -112,3 +112,39 @@ genuinely cannot read it.
 - Alias coverage beyond this generator  (Sheng Kuan)
 - Intent-level classifier rules, not template matches  (Zi Qi)
 - An API key, so the model tier is exercised at all  (Ee Zhan)
+
+---
+
+## Final round build — 24 Sep 2026 (Opus plans/reviews, Sonnet builds)
+
+Rubric weight: Technical 70 (E2E 25, Architecture 15, Tech integration 15,
+Robustness 15), Product 30 (Value 10, UX + differentiation 10, Impact 10).
+
+- [x] WP-A (Sonnet, worktree): inbox triage banner "N need you now" + Start +
+      progress + green done state with time saved + "k left" per tab
+- [x] WP-B (Sonnet, worktree): per-kind confirm labels; `d` blocked on
+      Needs-a-human; Undo toast; source lines open on mismatches; roll into
+      Needs-a-human when discrepancies are done; "Reply sent — next case"
+- [x] WP-C (Sonnet, worktree): container count sums all "N x TYPE" groups (bug:
+      mixed groups passed as match); model client timeout; /api/health commit +
+      model + switch; GitHub Actions CI + badge
+- [x] Opus review of A, B, C diffs (all MERGE AFTER FIXES; fixes applied)
+- [x] Merged on local branch final/ux-robustness: 290 passed, 1 skipped;
+      score 46/46, end-to-end 1.0000; browser check of banner, Start, d, Undo,
+      Needs-a-human guard
+- [x] Upload a dataset (.zip): /api/process-dataset + third inbox source;
+      security review fixes (confined attachment paths, per-request model
+      budget, 400 on bad zips); 520 emails in ~6 s locally
+- [x] Mark-as-same interplay fixes (review bar + banner use re-counted status)
+- [x] .gitattributes: PDFs binary (Windows clones corrupted email_499_BL.pdf)
+- [x] E2E fresh-visitor test, desktop + 375 px + 768 px: all PASS; mobile
+      triage gap fixed
+- [x] Push to main
+
+### Review (24 Sep)
+400 passed, 1 skipped; organiser score 1.0000 (46/46). Opus reviewed every
+Sonnet diff; every review found real issues, all fixed before merge.
+- [ ] DECIDE (user): model-read match -> NEEDS_REVIEW (closes wrong-field gap)
+- [x] Spend cap: not wanted (user, 24 Sep)
+- [x] Held-out re-run: 21 calls, 0 wrong; page shows 18 of 41
+- [x] PR #5 was closed by its author; SK PRs #6/#7 + 3 docs commits merged
