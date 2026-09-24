@@ -9,7 +9,14 @@ scenario.
 from __future__ import annotations
 
 from core.compare import compare
-from core.equivalence import EQUIVALENCE_FIELDS, can_learn, make_lookup, pair_key
+from core.equivalence import (
+    EQUIVALENCE_FIELDS,
+    build_pair_index,
+    can_learn,
+    evaluate_case,
+    make_lookup,
+    pair_key,
+)
 from core.types import COMPARE_FIELDS, ExtractedDoc, FieldValue
 
 
@@ -196,3 +203,201 @@ def test_known_equal_only_ever_downgrades_never_upgrades():
     rows = compare(si, bl, known_equal=always_false)
     consignee = next(r for r in rows if r.field == "consignee")
     assert consignee.matched is True
+
+
+# ---------------------------------------------------------------------------
+# build_pair_index
+# ---------------------------------------------------------------------------
+def test_build_pair_index_maps_pair_key_to_id():
+    pairs = [{"id": "p1", "field": "consignee", "a": "A", "b": "B"}]
+    index = build_pair_index(pairs)
+    assert index[pair_key("consignee", "A", "B")] == "p1"
+
+
+def test_build_pair_index_skips_malformed_records():
+    pairs = [{"field": "consignee"}, {"a": "A", "b": "B", "id": "x"}, "nope", None]
+    assert build_pair_index(pairs) == {}
+
+
+# ---------------------------------------------------------------------------
+# evaluate_case: the one rule
+# ---------------------------------------------------------------------------
+def _row(field, si_value, bl_value, matched=False, undecidable=False, learned=False):
+    return {
+        "field": field,
+        "matched": matched,
+        "undecidable": undecidable,
+        "learned": learned,
+        "si": {"value": si_value} if si_value is not None else None,
+        "bl": {"value": bl_value} if bl_value is not None else None,
+    }
+
+
+def _comparison_case(email_id, status, defect_fields, comparisons, category="BL_COMPARISON", review_reason=None):
+    return {
+        "email_id": email_id,
+        "status": status,
+        "category": category,
+        "review_reason": review_reason,
+        "defect_fields": defect_fields,
+        "has_defect": bool(defect_fields),
+        "comparisons": comparisons,
+    }
+
+
+def test_covered_row_leaves_case_status_but_drops_from_defects_when_others_remain():
+    comparisons = [
+        _row("consignee", "EAST BRIGHT FZ-LLC", "UAB NOVAKOPA"),
+        _row("notify_party", "EAST BRIGHT FZ-LLC", "UAB NOVAKOPA"),
+    ]
+    case = _comparison_case("e1", "MISMATCH", ["consignee", "notify_party"], comparisons)
+    index = build_pair_index([
+        {"id": "p1", "field": "consignee", "a": "EAST BRIGHT FZ-LLC", "b": "UAB NOVAKOPA"},
+    ])
+    result = evaluate_case(case, index)
+    assert result["status"] == "MISMATCH"
+    assert result["defect_fields"] == ["notify_party"]
+    assert result["rows"] == {"consignee": "p1"}
+    assert result["changed"] is True
+
+
+def test_mismatch_becomes_ok_only_when_all_differing_rows_covered():
+    comparisons = [
+        _row("consignee", "EAST BRIGHT FZ-LLC", "UAB NOVAKOPA"),
+        _row("notify_party", "EAST BRIGHT FZ-LLC", "UAB NOVAKOPA"),
+    ]
+    case = _comparison_case("e1", "MISMATCH", ["consignee", "notify_party"], comparisons)
+    index = build_pair_index([
+        {"id": "p1", "field": "consignee", "a": "EAST BRIGHT FZ-LLC", "b": "UAB NOVAKOPA"},
+        {"id": "p2", "field": "notify_party", "a": "EAST BRIGHT FZ-LLC", "b": "UAB NOVAKOPA"},
+    ])
+    result = evaluate_case(case, index)
+    assert result["status"] == "OK"
+    assert result["defect_fields"] == []
+    assert result["has_defect"] is False
+    assert result["changed"] is True
+
+
+def test_needs_review_case_is_left_untouched():
+    case = {
+        "email_id": "e2",
+        "status": "NEEDS_REVIEW",
+        "category": "BL_COMPARISON",
+        "review_reason": "unreadable",
+        "defect_fields": [],
+        "has_defect": False,
+        "comparisons": [],
+    }
+    index = build_pair_index([{"id": "p1", "field": "consignee", "a": "A", "b": "B"}])
+    result = evaluate_case(case, index)
+    assert result["status"] == "NEEDS_REVIEW"
+    assert result["changed"] is False
+
+
+def test_non_comparison_case_is_left_untouched():
+    case = {
+        "email_id": "e3",
+        "status": "OK",
+        "category": "GENERAL",
+        "review_reason": None,
+        "defect_fields": [],
+        "has_defect": False,
+        "comparisons": [],
+    }
+    result = evaluate_case(case, {})
+    assert result["status"] == "OK"
+    assert result["changed"] is False
+
+
+def test_learned_row_without_a_covering_pair_counts_as_defect_again():
+    """A row already marked `learned: true` (matched=True) with no pair on
+    record any more (removed) is still a defect - `differs` looks past
+    `matched` at `learned`."""
+    comparisons = [_row("consignee", "EAST BRIGHT FZ-LLC", "UAB NOVAKOPA", matched=True, learned=True)]
+    case = _comparison_case("e4", "OK", [], comparisons)
+    result = evaluate_case(case, {})  # no pairs on record
+    assert result["status"] == "MISMATCH"
+    assert result["defect_fields"] == ["consignee"]
+    assert result["changed"] is True
+
+
+def test_numeric_field_row_never_covered():
+    comparisons = [_row("container_count", "6", "7")]
+    case = _comparison_case("e5", "MISMATCH", ["container_count"], comparisons)
+    index = build_pair_index([{"id": "p1", "field": "container_count", "a": "6", "b": "7"}])
+    result = evaluate_case(case, index)
+    assert result["defect_fields"] == ["container_count"]
+    assert result["rows"] == {}
+
+
+def test_undecidable_row_never_covered():
+    comparisons = [_row("consignee", None, "UAB NOVAKOPA", undecidable=True)]
+    case = _comparison_case("e6", "NEEDS_REVIEW", [], comparisons, review_reason="missing_value")
+    index = build_pair_index([{"id": "p1", "field": "consignee", "a": "A", "b": "UAB NOVAKOPA"}])
+    result = evaluate_case(case, index)
+    assert result["rows"] == {}
+
+
+def test_covered_row_is_field_scoped():
+    comparisons = [_row("notify_party", "EAST BRIGHT FZ-LLC", "UAB NOVAKOPA")]
+    case = _comparison_case("e7", "MISMATCH", ["notify_party"], comparisons)
+    index = build_pair_index([{"id": "p1", "field": "consignee", "a": "EAST BRIGHT FZ-LLC", "b": "UAB NOVAKOPA"}])
+    result = evaluate_case(case, index)
+    assert result["defect_fields"] == ["notify_party"]
+
+
+def test_covered_row_is_order_independent():
+    comparisons = [_row("consignee", "EAST BRIGHT FZ-LLC", "UAB NOVAKOPA")]
+    case = _comparison_case("e8", "MISMATCH", ["consignee"], comparisons)
+    index = build_pair_index([{"id": "p1", "field": "consignee", "a": "UAB NOVAKOPA", "b": "EAST BRIGHT FZ-LLC"}])
+    result = evaluate_case(case, index)
+    assert result["defect_fields"] == []
+
+
+def test_recheck_still_wrong_and_newly_broken_covered_become_ok():
+    case = {
+        "email_id": "e9",
+        "status": "OK",
+        "category": "GENERAL",
+        "review_reason": None,
+        "defect_fields": [],
+        "has_defect": False,
+        "comparisons": [],
+        "recheck": {
+            "rows": [
+                {"field": "notify_party", "outcome": "still_wrong", "si": "EAST BRIGHT FZ-LLC", "v1": "UAB NOVAKOPA", "v2": "UAB NOVAKOPA"},
+                {"field": "container_count", "outcome": "newly_broken", "si": "6", "v1": "6", "v2": "5"},
+                {"field": "shipper", "outcome": "ok", "si": "A", "v1": "A", "v2": "A"},
+            ]
+        },
+    }
+    index = build_pair_index([
+        {"id": "p1", "field": "notify_party", "a": "EAST BRIGHT FZ-LLC", "b": "UAB NOVAKOPA"},
+    ])
+    result = evaluate_case(case, index)
+    assert result["recheck"]["notify_party"] == {"outcome": "ok", "pair_id": "p1"}
+    # container_count is not a learnable field, so never covered
+    assert "container_count" not in result["recheck"]
+    assert result["changed"] is True
+
+
+def test_recheck_unrelated_outcomes_never_change():
+    case = {
+        "email_id": "e10",
+        "status": "OK",
+        "category": "GENERAL",
+        "review_reason": None,
+        "defect_fields": [],
+        "has_defect": False,
+        "comparisons": [],
+        "recheck": {"rows": [{"field": "shipper", "outcome": "fixed", "si": "A", "v1": "B", "v2": "A"}]},
+    }
+    index = build_pair_index([{"id": "p1", "field": "shipper", "a": "A", "b": "B"}])
+    result = evaluate_case(case, index)
+    assert result["recheck"] == {}
+    assert result["changed"] is False
+
+
+def test_evaluate_case_never_raises_on_garbage():
+    assert evaluate_case({}, {})["status"] is None
+    assert evaluate_case({"comparisons": "not a list"}, {})["changed"] is False

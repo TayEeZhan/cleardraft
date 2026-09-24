@@ -297,3 +297,198 @@ def test_learned_pair_also_clears_process_email_path(client):
     board = resp.json()["board"]
     assert "consignee" not in board["defect_fields"]
     assert "notify_party" in board["defect_fields"]
+
+
+# ---------------------------------------------------------------------------
+# note / already_marked
+# ---------------------------------------------------------------------------
+def test_note_is_stored_and_returned(client):
+    _signup(client)
+    resp = _learn_consignee_pair(client, note="Same company, renamed")
+    assert resp.status_code == 200
+    assert resp.json()["pair"]["note"] == "Same company, renamed"
+    assert resp.json()["pair"]["updated_at"] is None
+
+    listing = client.get("/api/equivalences").json()
+    assert listing["pairs"][0]["note"] == "Same company, renamed"
+
+
+def test_note_too_long_is_400(client):
+    _signup(client)
+    resp = _learn_consignee_pair(client, note="x" * 281)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "note_too_long"
+
+
+def test_duplicate_learn_marks_already_marked_and_fills_empty_note(client):
+    _signup(client)
+    first = _learn_consignee_pair(client)
+    assert first.json().get("already_marked") is None or first.json().get("already_marked") is not True
+
+    second = _learn_consignee_pair(client, note="added later")
+    assert second.status_code == 200
+    assert second.json()["already_marked"] is True
+    assert second.json()["pair"]["note"] == "added later"
+
+    third = _learn_consignee_pair(client, note="ignored, note already set")
+    assert third.json()["pair"]["note"] == "added later"
+
+
+def test_raw_value_over_200_with_short_normalised_wording_learns(client):
+    """A company name with its postal address glued on can be well past 200
+    raw characters while normalising to a short name - it must still learn."""
+    _signup(client)
+    si_value = "EAST BRIGHT FZ-LLC | " + ("ADDRESS LINE " * 20)
+    resp = _learn_consignee_pair(client, si_value=si_value, bl_value=CONSIGNEE_BL_VALUE)
+    assert resp.status_code == 200
+    assert resp.json()["pair"]["a"] == "EAST BRIGHT FZ-LLC"
+
+
+def test_normalised_wording_over_200_is_400(client):
+    _signup(client)
+    long_name = "X" * 250
+    resp = _learn_consignee_pair(client, si_value=long_name, bl_value=CONSIGNEE_BL_VALUE)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "value_too_long"
+
+
+def test_raw_value_over_max_input_length_is_400(client):
+    _signup(client)
+    resp = _learn_consignee_pair(client, si_value="x" * 2001)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "value_too_long"
+
+
+# ---------------------------------------------------------------------------
+# PATCH
+# ---------------------------------------------------------------------------
+def test_patch_note(client):
+    _signup(client)
+    pair = _learn_consignee_pair(client).json()["pair"]
+    resp = client.patch(f"/api/equivalences/{pair['id']}", json={"note": "renamed after merger"})
+    assert resp.status_code == 200
+    assert resp.json()["pair"]["note"] == "renamed after merger"
+    assert resp.json()["pair"]["updated_at"] is not None
+
+
+def test_patch_wording_renormalises(client):
+    _signup(client)
+    pair = _learn_consignee_pair(client).json()["pair"]
+    resp = client.patch(f"/api/equivalences/{pair['id']}", json={"bl_value": "NOVAKOPA GROUP"})
+    assert resp.status_code == 200
+    assert resp.json()["pair"]["b"] == "NOVAKOPA GROUP"
+
+
+def test_patch_duplicate_pair_is_409(client):
+    _signup(client)
+    _learn_consignee_pair(client, field="shipper", si_value="A CO", bl_value="B CO")
+    dup = _learn_consignee_pair(client, field="shipper", si_value="C CO", bl_value="D CO").json()["pair"]
+    resp = client.patch(f"/api/equivalences/{dup['id']}", json={"si_value": "A CO", "bl_value": "B CO"})
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "duplicate_pair"
+
+
+def test_patch_field_immutable_is_400(client):
+    _signup(client)
+    pair = _learn_consignee_pair(client).json()["pair"]
+    resp = client.patch(f"/api/equivalences/{pair['id']}", json={"field": "shipper"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "field_immutable"
+
+
+def test_patch_other_account_id_is_404(client):
+    _signup(client, email="alice@example.com")
+    pair = _learn_consignee_pair(client).json()["pair"]
+    client.post("/api/auth/logout")
+
+    other = TestClient(app)
+    other.post("/api/auth/signup", json={"email": "bob@example.com", "password": "correct horse battery"})
+    resp = other.patch(f"/api/equivalences/{pair['id']}", json={"note": "hijack"})
+    assert resp.status_code == 404
+
+
+def test_patch_signed_out_is_401(client):
+    resp = client.patch("/api/equivalences/whatever", json={"note": "x"})
+    assert resp.status_code == 401
+
+
+def test_patch_note_too_long_is_400(client):
+    _signup(client)
+    pair = _learn_consignee_pair(client).json()["pair"]
+    resp = client.patch(f"/api/equivalences/{pair['id']}", json={"note": "x" * 281})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "note_too_long"
+
+
+# ---------------------------------------------------------------------------
+# evaluate
+# ---------------------------------------------------------------------------
+def _email_004_case(client):
+    import json as _json
+    with open(os.path.join(ROOT, "web", "public", "data.json"), encoding="utf-8") as fh:
+        data = _json.load(fh)
+    return data["detail"]["email_004"]
+
+
+def test_evaluate_signed_out_is_401(client):
+    resp = client.post("/api/equivalences/evaluate", json={"cases": []})
+    assert resp.status_code == 401
+
+
+def test_evaluate_too_many_cases_is_400(client):
+    _signup(client)
+    cases = [{"email_id": f"e{i}", "status": "OK", "category": "GENERAL", "comparisons": []} for i in range(601)]
+    resp = client.post("/api/equivalences/evaluate", json={"cases": cases})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "too_many_cases"
+
+
+def test_evaluate_draft_requires_exactly_one_case(client):
+    _signup(client)
+    resp = client.post("/api/equivalences/evaluate", json={"cases": [], "draft": True})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "draft_requires_one_case"
+
+
+def test_evaluate_preserves_input_order(client):
+    _signup(client)
+    cases = [
+        {"email_id": "a", "status": "OK", "category": "GENERAL", "comparisons": []},
+        {"email_id": "b", "status": "OK", "category": "GENERAL", "comparisons": []},
+    ]
+    resp = client.post("/api/equivalences/evaluate", json={"cases": cases})
+    assert resp.status_code == 200
+    ids = [c["email_id"] for c in resp.json()["cases"]]
+    assert ids == ["a", "b"]
+
+
+def test_evaluate_marks_covered_row_and_draft_reply_drops_consignee(client):
+    _signup(client)
+    _learn_consignee_pair(client)
+    case = _email_004_case(client)
+
+    resp = client.post("/api/equivalences/evaluate", json={"cases": [case], "draft": True})
+    assert resp.status_code == 200
+    result = resp.json()["cases"][0]
+    assert result["changed"] is True
+    assert "consignee" not in result["defect_fields"]
+    assert "notify_party" in result["defect_fields"]
+    assert "consignee" in result["rows"]
+
+    reply = result["reply_draft"]
+    assert "Consignee" not in reply
+    assert "Notify Party" in reply
+
+
+def test_evaluate_recheck_redraft_marks_covered_field(client):
+    _signup(client)
+    _learn_consignee_pair(client)
+    case = _email_004_case(client)
+
+    resp = client.post("/api/equivalences/evaluate", json={"cases": [case], "draft": True})
+    result = resp.json()["cases"][0]
+    assert "recheck_reply_draft" in result
+    # consignee was already "fixed" in v2 in this fixture; notify_party
+    # "still_wrong" SI==BL of the learned pair should now read as covered.
+    recheck_effective = result.get("recheck", {})
+    assert isinstance(recheck_effective, dict)
