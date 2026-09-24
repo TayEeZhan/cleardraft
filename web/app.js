@@ -1979,7 +1979,11 @@ function reviewBar(d) {
 
   if (context) {
     const idx = context.list.findIndex((r) => r.email_id === id);
-    bar.append(el("div", "done-bar-pos", `Case ${idx + 1} of ${context.list.length} in ${TAB_LABELS[context.tab]}`));
+    /* idx is -1 when "Mark as same" re-counted this case out of the tab the
+       clerk is walking. Say so instead of printing "Case 0 of N". */
+    bar.append(el("div", "done-bar-pos", idx === -1
+      ? `Moved out of ${TAB_LABELS[context.tab]} (${context.list.length} case${context.list.length === 1 ? "" : "s"} there now)`
+      : `Case ${idx + 1} of ${context.list.length} in ${TAB_LABELS[context.tab]}`));
   }
 
   /* On an unreviewed needs-a-human case, D does not confirm anything — it
