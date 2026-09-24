@@ -446,7 +446,7 @@ function renderBoard() {
 
   if (ACCOUNT.user && PAIRS.length && !BOARD_BATCH_TRIED[SRC]) {
     evaluateBoardBatch(SRC).then((changed) => {
-      if (changed && location.hash.startsWith("#/board")) { updateTabCounts(); renderBoard(); }
+      if (changed && location.hash.startsWith("#/board")) { updateTabCounts(); renderBoard(); renderTriageBanner(); }
     });
   }
 }
@@ -574,6 +574,22 @@ function stateOf(c) {
    screen and the live "Check a pair" result, so the two never drift apart. */
 function verdictKind(d) {
   return d.status === "MISMATCH" ? "mismatch" : d.status === "NEEDS_REVIEW" ? "review" : "match";
+}
+
+/* verdictKind(), but reading the re-counted status when a live evaluation is
+   cached for this case (see effectiveFor()/EVAL_CACHE) - the same source
+   renderVerdict()/yourPartLine() already read via their `evaluation` param.
+   reviewBar() and the keyboard-nav "d" handler only have `d`, not a
+   pre-fetched evaluation, so this looks it up the same way renderReview()
+   does (findRowById -> EVAL_CACHE[source].get(id)). Falls back to
+   verdictKind(d) whenever nothing is cached (signed out, no pairs, or the
+   case hasn't been evaluated yet). */
+function effectiveKind(d) {
+  const found = findRowById(d.email_id);
+  const source = found ? found.source : SRC;
+  const evaluation = ACCOUNT.user ? EVAL_CACHE[source].get(d.email_id) : null;
+  if (!evaluation) return verdictKind(d);
+  return evaluation.status === "MISMATCH" ? "mismatch" : evaluation.status === "NEEDS_REVIEW" ? "review" : "match";
 }
 
 function renderVerdict(d, host, { reply = true, afterVerdict = null, evaluation = null, rerender = null } = {}) {
@@ -1660,14 +1676,16 @@ function getCaseListContext(id) {
   const found = findRowById(id);
   if (!found) return null;
   const { row, source } = found;
-  const ownTab = tabOf(row);
 
   if (SRC === source) {
-    const activeList = computeFilteredList(SRC, TAB, QUERY);
-    if (activeList.some((r) => r.email_id === id)) {
-      return { source: SRC, tab: TAB, query: QUERY, list: activeList };
-    }
+    /* Stay on the tab the clerk was actually reviewing even when a live
+       re-count (Mark as same) has just moved this case out of it (e.g.
+       Discrepancy -> Cleared) - do not fall back to the case's new tab.
+       The case may no longer be IN this list; advanceCase() handles that
+       by walking forward from "before the start" of it. */
+    return { source: SRC, tab: TAB, query: QUERY, list: computeFilteredList(SRC, TAB, QUERY) };
   }
+  const ownTab = tabOf(row);
   return { source, tab: ownTab, query: "", list: computeFilteredList(source, ownTab, "") };
 }
 
@@ -1717,8 +1735,14 @@ function goToBoardTab(source, tab, query, message, action) {
    would quietly vanish the moment the last case in a tab gets confirmed. */
 function advanceCase(id, context, { requireUndone, undoAction }) {
   const { list, source, tab, query } = context;
+  if (!list.length) { goToBoardTab(source, tab, query, null); return; }
+  /* idx is -1 when a live re-count just moved this case out of the active
+     tab's list (e.g. Discrepancy -> Cleared via Mark as same). Treat that
+     as sitting just before the list rather than bailing out to the board:
+     (idx + 1) % list.length and nextUnreviewedIndex(list, idx) both land on
+     index 0 first when idx is -1, so "next" walks to the first unreviewed
+     row of the tab the clerk was actually on. */
   const idx = list.findIndex((r) => r.email_id === id);
-  if (idx === -1) { goToBoardTab(source, tab, query, null); return; }
 
   if (!requireUndone) {
     navigateToCase(list[(idx + 1) % list.length].email_id);
@@ -1776,7 +1800,7 @@ function refreshDoneBarForReply(d) {
   if (!bar) return;
   const noteForm = bar.querySelector(".review-flag-form");
   if (noteForm && !noteForm.hidden) {
-    if (verdictKind(d) === "mismatch") {
+    if (effectiveKind(d) === "mismatch") {
       if (!bar.querySelector(".reply-opened-chip")) {
         bar.insertBefore(el("span", "chip chip-quiet reply-opened-chip", "Reply opened"), bar.firstChild);
       }
@@ -1837,7 +1861,7 @@ function reviewBar(d) {
   const id = d.email_id;
   const context = getCaseListContext(id);
   const review = getReview(id);
-  const kind = verdictKind(d);
+  const kind = effectiveKind(d);
 
   const bar = el("div", "done-bar");
 
@@ -1993,7 +2017,7 @@ function initCaseKeyboardNav() {
       advanceCase(id, context, { requireUndone: false });
       return;
     }
-    if (!isReviewed(id) && verdictKind(d) === "review") {
+    if (!isReviewed(id) && effectiveKind(d) === "review") {
       toast("ClearDraft didn't decide this one — choose an outcome below.");
       return;
     }
