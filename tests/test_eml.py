@@ -147,6 +147,18 @@ def _upload(name: str, data: "bytes | None" = None):
     )
 
 
+def _multi_draft_eml() -> bytes:
+    fixture = os.path.join(ROOT, "data", "challenge", "multi_draft")
+    msg = email.message.EmailMessage()
+    msg["From"] = "docs@example.com"
+    msg["Subject"] = "Please verify both draft BL versions against the SI"
+    msg.set_content("Compare the selected draft against the attached SI.")
+    for name in ("multi_SI.txt", "multi_BL_v1.txt", "multi_BL_v2.txt"):
+        with open(os.path.join(fixture, name), "rb") as fh:
+            msg.add_attachment(fh.read(), maintype="text", subtype="plain", filename=name)
+    return bytes(msg)
+
+
 def test_email_004_reports_mismatch_with_expected_defect_fields():
     resp = _upload("01_mismatch_email_004.eml")
     assert resp.status_code == 200
@@ -181,6 +193,51 @@ def test_upload_id_is_stable_across_two_uploads():
     second = _upload("01_mismatch_email_004.eml", data).json()
     assert first["board"]["email_id"] == second["board"]["email_id"]
     assert first["board"]["email_id"].startswith("up_")
+
+
+def test_multiple_drafts_require_an_explicit_selection_before_processing():
+    raw = _multi_draft_eml()
+    first = client.post(
+        "/api/process-email",
+        files={"eml": ("multiple.eml", raw, "message/rfc822")},
+    )
+    assert first.status_code == 200
+    body = first.json()
+    assert body["selection_required"] is True
+    assert "board" not in body
+    assert [item["name"] for item in body["document_candidates"]["si"]] == ["multi_SI.txt"]
+    assert [item["name"] for item in body["document_candidates"]["bl"]] == [
+        "multi_BL_v1.txt",
+        "multi_BL_v2.txt",
+    ]
+
+
+def test_selected_draft_is_compared_and_recorded_explicitly():
+    raw = _multi_draft_eml()
+    response = client.post(
+        "/api/process-email",
+        data={"selected_si": "0_multi_SI.txt", "selected_bl": "2_multi_BL_v2.txt"},
+        files={"eml": ("multiple.eml", raw, "message/rfc822")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["selection_required"] is False
+    assert body["board"]["status"] == "MISMATCH"
+    assert body["board"]["defect_fields"] == ["container_count"]
+    assert body["detail"]["selected_documents"] == {
+        "si": "0_multi_SI.txt",
+        "bl": "2_multi_BL_v2.txt",
+    }
+
+
+def test_invalid_document_selection_is_rejected():
+    response = client.post(
+        "/api/process-email",
+        data={"selected_si": "0_multi_SI.txt", "selected_bl": "not-a-candidate.txt"},
+        files={"eml": ("multiple.eml", _multi_draft_eml(), "message/rfc822")},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_document_selection"
 
 
 def test_wrong_extension_is_400():

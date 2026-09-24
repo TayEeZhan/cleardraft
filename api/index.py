@@ -54,7 +54,7 @@ from core.classify import classify  # noqa: E402
 from core.compare import compare  # noqa: E402
 from core.decide import decide  # noqa: E402
 from core.extract import extract  # noqa: E402
-from core.pipeline import split_si_bl  # noqa: E402
+from core.pipeline import candidate_docs, split_si_bl  # noqa: E402
 from core.reply import FIELD_LABELS, _reference, draft_reply  # noqa: E402
 from core.types import Classification, Email  # noqa: E402
 from core.variance import comparison_variance  # noqa: E402
@@ -313,7 +313,13 @@ async def check(
     return payload
 
 
-def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict | JSONResponse":
+def _process_eml_bytes(
+    data: bytes,
+    upload_name: str,
+    known_equal=None,
+    selected_si: str = "",
+    selected_bl: str = "",
+) -> "dict | JSONResponse":
     """The one pipeline: raw .eml bytes in, {board, detail, model_delta} out.
 
     Shared by both `/api/process-email` request shapes - an uploaded .eml
@@ -325,6 +331,10 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
     `known_equal`, when given, is api._equivalences.lookup_for(request)'s
     result - the signed-in caller's learned pairs, or None when signed out
     or accounts are unavailable. Passed straight through to compare().
+
+    `selected_si` and `selected_bl` are stable candidate IDs returned by a
+    previous selection-required response. Multiple candidates are never
+    resolved from attachment order on this interactive path.
 
     Nothing is written anywhere except a per-request tempfile.TemporaryDirectory,
     which is removed before this function returns. No email content is logged.
@@ -381,7 +391,55 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
         if classification.category == "BL_COMPARISON":
             docs = [extract(os.path.join(tmp_dir, name)) for name in saved_names]
 
-        si, bl = split_si_bl(docs)
+        sis, bls = candidate_docs(docs)
+
+        def _candidate(doc) -> dict:
+            saved = os.path.basename(doc.path)
+            return {
+                "id": saved,
+                "name": original_by_saved.get(saved, saved),
+                "kind": doc.kind,
+                "readable": doc.readable,
+                "error": doc.error,
+            }
+
+        document_candidates = {
+            "si": [_candidate(doc) for doc in sis],
+            "bl": [_candidate(doc) for doc in bls],
+        }
+        has_selection = bool(selected_si or selected_bl)
+        selection_is_needed = len(sis) > 1 or len(bls) > 1
+
+        if has_selection:
+            if not selected_si or not selected_bl:
+                return _error(
+                    400,
+                    "invalid_document_selection",
+                    "Choose one Shipping Instruction and one draft Bill of Lading.",
+                )
+            si = next((doc for doc in sis if os.path.basename(doc.path) == selected_si), None)
+            bl = next((doc for doc in bls if os.path.basename(doc.path) == selected_bl), None)
+            if si is None or bl is None:
+                return _error(
+                    400,
+                    "invalid_document_selection",
+                    "The selected SI or draft BL is not a candidate from this email.",
+                )
+        elif selection_is_needed:
+            after = _stats_snapshot()
+            model_delta = {key: after[key] - before[key] for key in before}
+            return {
+                "selection_required": True,
+                "document_candidates": document_candidates,
+                "email": {
+                    "subject": email_obj.subject,
+                    "from": email_obj.sender,
+                    "filename": upload_name,
+                },
+                "model_delta": model_delta,
+            }
+        else:
+            si, bl = split_si_bl(docs)
 
         comparisons = ()
         if si is not None and bl is not None and si.readable and bl.readable:
@@ -443,6 +501,11 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
             "decided_by": decision.decided_by,
             "defect_fields": list(decision.defect_fields),
             "documents": {"si": _export_doc(si, _source_name(si)), "bl": _export_doc(bl, _source_name(bl))},
+            "selected_documents": {
+                "si": os.path.basename(si.path) if si is not None else None,
+                "bl": os.path.basename(bl.path) if bl is not None else None,
+            },
+            "document_candidates": document_candidates,
             "comparisons": comparison_rows,
             "reply_draft": reply_draft,
             "recheck": None,
@@ -456,7 +519,12 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
     after = _stats_snapshot()
     model_delta = {key: after[key] - before[key] for key in before}
 
-    return {"board": board, "detail": detail, "model_delta": model_delta}
+    return {
+        "selection_required": False,
+        "board": board,
+        "detail": detail,
+        "model_delta": model_delta,
+    }
 
 
 @app.post("/api/process-email")
@@ -467,6 +535,8 @@ async def process_email(
     body: "str | None" = Form(None),
     sender: str = Form(""),
     files: "list[UploadFile]" = File(default=[]),
+    selected_si: str = Form(""),
+    selected_bl: str = Form(""),
 ):
     """Upload-your-own-email demo path, in two request shapes:
 
@@ -542,9 +612,25 @@ async def process_email(
         upload_name = "Pasted email"
 
     known_equal = lookup_for(request)
-    result = _process_eml_bytes(data, upload_name, known_equal=known_equal)
+    result = _process_eml_bytes(
+        data,
+        upload_name,
+        known_equal=known_equal,
+        selected_si=selected_si,
+        selected_bl=selected_bl,
+    )
     if isinstance(result, JSONResponse):
         return result
+
+    if result.get("selection_required"):
+        return {
+            "selection_required": True,
+            "document_candidates": result["document_candidates"],
+            "email": result["email"],
+            "model": {"available": model_available(), **result["model_delta"]},
+            "seconds": round(time.time() - started, 2),
+            "saved": False,
+        }
 
     board, detail, model_delta = result["board"], result["detail"], result["model_delta"]
 
@@ -564,6 +650,7 @@ async def process_email(
             save_error = "save_failed"
 
     payload = {
+        "selection_required": False,
         "board": board,
         "detail": detail,
         "model": {"available": model_available(), **model_delta},

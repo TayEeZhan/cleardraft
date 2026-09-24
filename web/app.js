@@ -3040,9 +3040,84 @@ async function submitProcessEmail(fd) {
   return r.json();
 }
 
-async function uploadOne(file) {
+function chooseDocumentCandidates(data) {
+  const host = $("#upload-panel");
+  const candidates = data.document_candidates || {};
+  const groups = [
+    { key: "si", title: "Shipping Instruction", items: candidates.si || [] },
+    { key: "bl", title: "Draft Bill of Lading", items: candidates.bl || [] },
+  ];
+
+  host.replaceChildren();
+  host.hidden = false;
+  const card = el("section", "document-chooser");
+  card.append(el("div", "document-chooser-badge", "Selection required"));
+  card.append(el("h3", null, "Choose the documents to compare"));
+  card.append(el("p", "document-chooser-help",
+    "This email contains more than one possible document. ClearDraft will not guess from attachment order."));
+
+  const picked = { si: "", bl: "" };
+  const confirm = el("button", "btn btn-primary", "Compare selected pair");
+  confirm.type = "button";
+  confirm.disabled = true;
+  const refresh = () => { confirm.disabled = !(picked.si && picked.bl); };
+
+  for (const group of groups) {
+    const fieldset = document.createElement("fieldset");
+    fieldset.className = "document-choice-group";
+    const legend = document.createElement("legend");
+    legend.textContent = group.title;
+    fieldset.append(legend);
+    for (const item of group.items) {
+      const label = el("label", "document-choice");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = `document-choice-${group.key}`;
+      radio.value = item.id;
+      const copy = el("span", "document-choice-copy");
+      copy.append(el("strong", null, item.name));
+      copy.append(el("small", null,
+        item.readable ? `${item.kind} · readable` : `${item.kind} · ${item.error || "unreadable"}`));
+      label.append(radio, copy);
+      fieldset.append(label);
+      radio.addEventListener("change", () => {
+        picked[group.key] = radio.value;
+        refresh();
+      });
+      if (group.items.length === 1) {
+        radio.checked = true;
+        picked[group.key] = item.id;
+      }
+    }
+    card.append(fieldset);
+  }
+  refresh();
+
+  return new Promise((resolve) => {
+    const actions = el("div", "document-chooser-actions");
+    const cancel = el("button", "btn btn-quiet", "Cancel");
+    cancel.type = "button";
+    const finish = (value) => {
+      host.replaceChildren();
+      host.hidden = true;
+      resolve(value);
+    };
+    cancel.addEventListener("click", () => finish(null));
+    confirm.addEventListener("click", () => finish({
+      selected_si: picked.si,
+      selected_bl: picked.bl,
+    }));
+    actions.append(cancel, confirm);
+    card.append(actions);
+    host.append(card);
+  });
+}
+
+async function uploadOne(file, selection = {}) {
   const fd = new FormData();
   fd.append("eml", file);
+  if (selection.selected_si) fd.append("selected_si", selection.selected_si);
+  if (selection.selected_bl) fd.append("selected_bl", selection.selected_bl);
   return submitProcessEmail(fd);
 }
 
@@ -3071,7 +3146,17 @@ async function uploadFiles(fileList) {
     const file = emlFiles[i];
     progress.textContent = `Reading ${i + 1} of ${emlFiles.length} — ${file.name}`;
     try {
-      const data = await uploadOne(file);
+      let data = await uploadOne(file);
+      if (data.selection_required) {
+        progress.textContent = `Choose documents for ${file.name}`;
+        const selection = await chooseDocumentCandidates(data);
+        if (!selection) {
+          errors.push({ name: file.name, detail: "document selection cancelled" });
+          continue;
+        }
+        progress.textContent = `Checking selected documents — ${file.name}`;
+        data = await uploadOne(file, selection);
+      }
       const wasDuplicate = mergeMineResult(data);
       persistMineIfLocal();
       successCount++;
@@ -3451,14 +3536,29 @@ async function submitPaste(e) {
   progress.hidden = false;
   progress.textContent = "Reading the email…";
 
-  const fd = new FormData();
-  if (subject) fd.append("subject", subject);
-  fd.append("body", body);
-  if (sender) fd.append("sender", sender);
-  for (const f of files) fd.append("files", f);
+  const pasteFormData = (selection = {}) => {
+    const fd = new FormData();
+    if (subject) fd.append("subject", subject);
+    fd.append("body", body);
+    if (sender) fd.append("sender", sender);
+    for (const f of files) fd.append("files", f);
+    if (selection.selected_si) fd.append("selected_si", selection.selected_si);
+    if (selection.selected_bl) fd.append("selected_bl", selection.selected_bl);
+    return fd;
+  };
 
   try {
-    const data = await submitProcessEmail(fd);
+    let data = await submitProcessEmail(pasteFormData());
+    if (data.selection_required) {
+      progress.textContent = "Choose the documents to compare…";
+      const selection = await chooseDocumentCandidates(data);
+      if (!selection) {
+        toast("Document selection cancelled.");
+        return;
+      }
+      progress.textContent = "Checking the selected documents…";
+      data = await submitProcessEmail(pasteFormData(selection));
+    }
     const wasDuplicate = mergeMineResult(data);
     persistMineIfLocal();
     resetPasteForm();

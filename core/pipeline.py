@@ -38,22 +38,41 @@ Decider = Callable[
 Drafter = Callable[[Email, Decision], str]
 
 
+def candidate_docs(
+    docs: "list[ExtractedDoc]",
+) -> "tuple[tuple[ExtractedDoc, ...], tuple[ExtractedDoc, ...]]":
+    """Return every plausible SI and BL, preserving attachment order.
+
+    The parser's explicit kind wins. Filename suffixes are only a fallback
+    for documents the parser could not identify, which prevents one document
+    from appearing in both candidate lists.
+    """
+    sis: list[ExtractedDoc] = []
+    bls: list[ExtractedDoc] = []
+    for doc in docs:
+        if doc.kind == "SI":
+            sis.append(doc)
+        elif doc.kind == "BL":
+            bls.append(doc)
+        elif "_SI." in doc.path.upper():
+            sis.append(doc)
+        elif "_BL." in doc.path.upper():
+            bls.append(doc)
+    return tuple(sis), tuple(bls)
+
+
 def split_si_bl(
     docs: "list[ExtractedDoc]",
 ) -> "tuple[ExtractedDoc | None, ExtractedDoc | None]":
-    """Pick the SI and the BL out of the attachments.
+    """Pick the first SI and BL candidate out of the attachments.
 
-    Prefer the parser's own `kind`. Fall back to the filename suffix
-    (_SI / _BL), which the dataset uses consistently. Returns (None, None)
-    when we cannot identify a pair - the decider escalates from there.
+    This deliberately retains the original deterministic first-candidate
+    behaviour for batch scoring and callers that cannot ask a human. Interactive
+    callers should use :func:`candidate_docs` and request an explicit choice
+    whenever either side contains more than one candidate.
     """
-    si = next((d for d in docs if d.kind == "SI"), None)
-    bl = next((d for d in docs if d.kind == "BL"), None)
-    if si is None:
-        si = next((d for d in docs if "_SI." in d.path.upper()), None)
-    if bl is None:
-        bl = next((d for d in docs if "_BL." in d.path.upper()), None)
-    return si, bl
+    sis, bls = candidate_docs(docs)
+    return (sis[0] if sis else None), (bls[0] if bls else None)
 
 
 def process(

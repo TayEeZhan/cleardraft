@@ -83,6 +83,27 @@ def test_weight_accepts_formatted_and_raw_xlsx_values() -> None:
     assert normalise_weight(21577) == 21577
 
 
+def test_weight_converts_supported_units_to_kilograms() -> None:
+    assert normalise_weight("22 MT") == 22000
+    assert normalise_weight("22.5 TONNE") == 22500
+    assert normalise_weight("22.5 TON") == 22500
+    assert normalise_weight("22.5 MTS") == 22500
+    assert normalise_weight("22,046.226 LBS") == 10000
+    assert normalise_weight("22,046.226 LB") == 10000
+    assert normalise_weight("21,577 KGM") == 21577
+
+
+def test_weight_unknown_or_malformed_units_are_undecidable() -> None:
+    assert normalise_weight("22 STONE") is None
+    assert normalise_weight("22 METRIC-TONNES") is None
+    assert normalise_weight("KG 22000") is None
+    assert normalise_weight("22 KG approx") is None
+
+
+def test_weight_rounds_only_after_unit_conversion() -> None:
+    assert normalise_weight("0.0006 MT") == 1
+
+
 def test_entity_punctuation_is_formatting_not_content() -> None:
     assert normalise_entity("MOORIM SP CO., LTD") == normalise_entity(
         "MOORIM SP CO LTD"
