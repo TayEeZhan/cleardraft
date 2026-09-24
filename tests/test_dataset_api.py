@@ -14,7 +14,9 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
+from adapters.ui_rows import _unit_fields
 from api.index import app
+from core.types import FieldComparison, FieldValue
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
@@ -430,3 +432,38 @@ def test_model_calls_are_reported_from_a_per_request_counter():
     resp = _post(_build_zip(ids))
     assert resp.status_code == 200
     assert resp.json()["source"]["model_calls"] == 0
+
+
+def _weight_fv(value: str) -> FieldValue:
+    return FieldValue(value=value, raw=value, line_no=1, label="Gross Wt (kgs)")
+
+
+def test_ui_rows_unit_fields_flags_same_weight_different_unit():
+    """Mirrors tests/test_api.py's test of api.index._unit_fields - the two
+    producers (adapters/ui_rows.py, api/index.py) must stay identical in
+    shape, per adapters/ui_rows.py's _unit_fields docstring."""
+    c = FieldComparison(
+        field="gross_weight_kg",
+        si=_weight_fv("22 MT"),
+        bl=_weight_fv("22,000 KG"),
+        si_norm=22000,
+        bl_norm=22000,
+        matched=True,
+    )
+    fields = _unit_fields(c)
+    assert fields["unit_note"] == "MT vs KG"
+    assert fields["unit_kg"] == 22000
+
+
+def test_ui_rows_unit_fields_none_for_ordinary_same_unit_match():
+    c = FieldComparison(
+        field="gross_weight_kg",
+        si=_weight_fv("21,577 KG"),
+        bl=_weight_fv("21,577 KG"),
+        si_norm=21577,
+        bl_norm=21577,
+        matched=True,
+    )
+    fields = _unit_fields(c)
+    assert fields["unit_note"] is None
+    assert fields["unit_kg"] is None

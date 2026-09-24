@@ -9,7 +9,8 @@ import os
 
 from fastapi.testclient import TestClient
 
-from api.index import app
+from api.index import _unit_fields, app
+from core.types import FieldComparison, FieldValue
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ATTACHMENTS = os.path.join(ROOT, "data", "attachments")
@@ -178,3 +179,52 @@ def test_emails_endpoint_is_not_implemented():
     """The web UI probes /api/emails; it must not be answered by this API."""
     resp = client.get("/api/emails")
     assert resp.status_code == 404
+
+
+def _weight_fv(value: str) -> FieldValue:
+    return FieldValue(value=value, raw=value, line_no=1, label="Gross Wt (kgs)")
+
+
+def test_unit_fields_flags_same_weight_different_unit():
+    """22 MT and 22,000 KG are the same weight, written in different units -
+    _unit_fields must surface that as unit_note/unit_kg (see core/units.py's
+    describe_unit_difference/parse_weight, which this wraps)."""
+    c = FieldComparison(
+        field="gross_weight_kg",
+        si=_weight_fv("22 MT"),
+        bl=_weight_fv("22,000 KG"),
+        si_norm=22000,
+        bl_norm=22000,
+        matched=True,
+    )
+    fields = _unit_fields(c)
+    assert fields["unit_note"] == "MT vs KG"
+    assert fields["unit_kg"] == 22000
+
+
+def test_unit_fields_none_for_ordinary_same_unit_match():
+    c = FieldComparison(
+        field="gross_weight_kg",
+        si=_weight_fv("21,577 KG"),
+        bl=_weight_fv("21,577 KG"),
+        si_norm=21577,
+        bl_norm=21577,
+        matched=True,
+    )
+    fields = _unit_fields(c)
+    assert fields["unit_note"] is None
+    assert fields["unit_kg"] is None
+
+
+def test_unit_fields_none_for_non_weight_field():
+    c = FieldComparison(
+        field="container_count",
+        si=_weight_fv("22 MT"),
+        bl=_weight_fv("22,000 KG"),
+        si_norm=22000,
+        bl_norm=22000,
+        matched=True,
+    )
+    fields = _unit_fields(c)
+    assert fields["unit_note"] is None
+    assert fields["unit_kg"] is None

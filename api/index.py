@@ -56,6 +56,7 @@ from core.extract import extract  # noqa: E402
 from core.pipeline import split_si_bl  # noqa: E402
 from core.reply import FIELD_LABELS, _reference, draft_reply  # noqa: E402
 from core.types import Classification, Email  # noqa: E402
+from core.units import describe_unit_difference, parse_weight  # noqa: E402
 
 app = FastAPI()
 app.include_router(accounts_router)
@@ -154,6 +155,22 @@ def _fv(field_value, source: str) -> "dict | None":
         "decided_by": field_value.decided_by,
         "source": source,
     }
+
+
+def _unit_fields(c) -> dict:
+    """{"unit_note", "unit_kg"} for a gross_weight_kg comparison whose two
+    sides are the same weight written in different units - e.g. "22 MT" vs
+    "22,000 KG" -> {"unit_note": "MT vs KG", "unit_kg": 22000}. Both None for
+    every other field, or when either side is missing. Never raises - mirrors
+    core.units.describe_unit_difference/parse_weight's own no-raise contract.
+    """
+    if c.field != "gross_weight_kg" or c.si is None or c.bl is None:
+        return {"unit_note": None, "unit_kg": None}
+    unit_note = describe_unit_difference(c.si.value, c.bl.value)
+    if unit_note is None:
+        return {"unit_note": None, "unit_kg": None}
+    w = parse_weight(c.si.value)
+    return {"unit_note": unit_note, "unit_kg": (w.kg if w is not None else None)}
 
 
 def _doc_info(doc, name: str) -> dict:
@@ -281,6 +298,7 @@ async def check(
             "bl_norm": c.bl_norm,
             "si": _fv(c.si, si.filename),
             "bl": _fv(c.bl, bl.filename),
+            **_unit_fields(c),
         }
         for c in comparisons
     ]
@@ -403,6 +421,7 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
                 "bl_norm": c.bl_norm,
                 "si": _fv(c.si, _source_name(si)),
                 "bl": _fv(c.bl, _source_name(bl)),
+                **_unit_fields(c),
             }
             for c in comparisons
         ]
