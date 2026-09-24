@@ -1,0 +1,9 @@
+# Document attachments are binary. Without this, git guesses that some PDFs
+# are text, and a Windows checkout with core.autocrlf=true rewrites their line
+# endings and corrupts them (email_499_BL.pdf then fails to parse).
+*.pdf  binary
+*.xlsx binary
+*.docx binary
+*.zip  binary
+*.png  binary
+*.jpg  binary
