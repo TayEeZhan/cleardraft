@@ -71,6 +71,17 @@
 
 9. Submit all five components on the hackathon site.
 
+## Mark as same and the submission
+
+"Mark as same" (a signed-in clerk teaching ClearDraft one exact SI/BL pair,
+see [README.md](../README.md#mark-as-same)) never touches the organiser
+submission. `scripts/run_pipeline.py` never passes `known_equal` to
+`compare()`, so `out/submission.json` is byte-identical whether or not any
+account has saved pairs. The **Submission file (JSON)** export in the UI is
+the same deliberate exception (`buildSubmissionJson` in `web/app.js`): it
+always exports the originally checked result, never a marked-as-same
+re-count, because it exists to score the pipeline itself.
+
 ## Owners
 
 | Task | Who |
