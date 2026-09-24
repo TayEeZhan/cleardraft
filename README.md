@@ -461,7 +461,7 @@ below for that.
 | `core/equivalence.py` | "Mark as same" — pure rule for learned pairs (ADR-011) | Sheng Kuan |
 | `adapters/` | Everything that touches the outside world (model, inbox) | Ee Zhan |
 | `api/index.py` | FastAPI on Vercel: `/api/health`, `/api/check` | Ee Zhan |
-| `api/_equivalences.py` | "Mark as same" routes and live re-evaluation | Ee Zhan |
+| `api/_equivalences.py` | "Mark as same" routes and live re-evaluation | Sheng Kuan |
 | `web/` | The website: plain HTML, CSS and JavaScript, no build step | Ee Zhan |
 | `scripts/` | Batch run, UI snapshot export, held-out challenge run | — |
 | `eval/` | The scoring harness | Zi Qi |
