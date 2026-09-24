@@ -291,6 +291,7 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 .seam-row > * { padding: 11px 14px; }
 
 .f-label { font-size: 13px; color: var(--ink-2); display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
+.f-label-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .f-val {
   font-family: var(--mono); font-size: 13px; line-height: 1.45;
   word-break: break-word; display: flex; align-items: center;
@@ -334,14 +335,15 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 @media (prefers-reduced-motion: reduce) { .f-val { transition: none; } }
 
 .proof-btn {
-  margin-top: 5px; font-family: var(--mono); font-size: 10.5px;
-  color: var(--ink-3); background: none; border: 0; padding: 0;
-  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
-  text-align: left;
+  background: var(--ink); color: #fff; border: 1px solid var(--ink);
+  font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1.2;
+  padding: 6px 12px; border-radius: 999px; min-height: 32px;
+  display: inline-flex; align-items: center;
+  cursor: pointer; white-space: nowrap; text-decoration: none;
 }
-.proof-btn:hover { color: var(--ink); }
-/* Same look, 44px tap area: padding grows the target, negative margin keeps the row height. */
-.proof-btn { padding-top: 15px; padding-bottom: 15px; margin-top: -10px; margin-bottom: -15px; }
+.proof-btn:hover { background: var(--marine); border-color: var(--marine); }
+.proof-btn[aria-expanded="true"] { background: var(--marine); border-color: var(--marine); }
+.proof-btn:disabled { opacity: .45; cursor: not-allowed; }
 .proof {
   padding: 0 14px 12px 148px;
   background: var(--surface-2); border-top: 1px dashed var(--rule);
@@ -918,15 +920,18 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 }
 
 /* ── Learned equivalences ──────────────────────────────────────── */
-/* "Mark as same" button on a mismatch row: same look and 44px tap area
-   as .proof-btn, so a seven-row table doesn't grow a second visual style. */
+/* "Mark as same" button on a mismatch row: same solid-pill style as
+   .proof-btn, so a seven-row table doesn't grow a second visual style. */
 .mark-same-btn {
-  margin-top: 5px; margin-left: 12px; font-family: var(--mono); font-size: 10.5px;
-  color: var(--ink-3); background: none; border: 0; padding: 0;
-  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+  background: var(--ink); color: #fff; border: 1px solid var(--ink);
+  font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1.2;
+  padding: 6px 12px; border-radius: 999px; min-height: 32px;
+  display: inline-flex; align-items: center;
+  cursor: pointer; white-space: nowrap; text-decoration: none;
 }
-.mark-same-btn:hover { color: var(--ink); }
-.mark-same-btn { padding-top: 15px; padding-bottom: 15px; margin-top: -10px; margin-bottom: -15px; }
+.mark-same-btn:hover { background: var(--marine); border-color: var(--marine); }
+.mark-same-btn[aria-expanded="true"] { background: var(--marine); border-color: var(--marine); }
+.mark-same-btn:disabled { opacity: .45; cursor: not-allowed; }
 
 .mark-same-confirm {
   padding: 12px 14px; background: var(--surface-2); border-top: 1px dashed var(--rule);
