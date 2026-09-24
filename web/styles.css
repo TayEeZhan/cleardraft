@@ -101,7 +101,7 @@ a { color: inherit; }
 .account-btn:hover { background: var(--surface); border-color: var(--ink-3); }
 .account-user-wrap { display: flex; align-items: center; gap: 8px; }
 .account-user-wrap[hidden] { display: none; }
-.account-email-btn { max-width: 140px; display: inline-flex; }
+.account-email-btn { max-width: 140px; display: inline-flex; align-items: center; }
 .account-email-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .account-menu {
   position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
@@ -127,18 +127,18 @@ a { color: inherit; }
   text-align: center; line-height: 18px;
 }
 .learned-shortcut-count[hidden] { display: none; }
+.learned-shortcut-label-short { display: none; }
 
 @media (max-width: 860px) {
   .account { padding-left: 10px; }
   .account-email-btn { max-width: 96px; }
-  .learned-shortcut-label {
-    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-  }
+  .learned-shortcut-label-full { display: none; }
+  .learned-shortcut-label-short { display: inline; }
 }
 @media (max-width: 420px) {
   .account-btn { font-size: 12.5px; padding: 7px 10px; }
   .account-email-btn { max-width: 72px; }
+  .learned-shortcut { padding-left: 8px; padding-right: 8px; gap: 4px; }
 }
 
 main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }

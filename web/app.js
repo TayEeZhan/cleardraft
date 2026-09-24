@@ -66,7 +66,7 @@ function renderLearnedShortcut() {
   const n = PAIRS.length;
   count.textContent = String(n);
   count.hidden = n === 0;
-  link.setAttribute("aria-label", n > 0 ? `Marked as same, ${n} pairs` : "Marked as same");
+  link.setAttribute("aria-label", n > 0 ? `Marked as same, ${n} pair${n === 1 ? "" : "s"}` : "Marked as same");
 }
 
 function pairById(id) { return PAIRS.find((p) => p.id === id) || null; }
