@@ -438,6 +438,10 @@ below for that.
 | `eval/` | The scoring harness | Zi Qi |
 | `data/` | The organiser's inbox and attachments | — |
 
+Finalist evaluation work - the frozen external dataset, per-field metrics,
+cost/speed baseline, validation slide, and Q&A ownership - is specified in
+[`docs/ZI_QI_FINALIST_PLAN.md`](docs/ZI_QI_FINALIST_PLAN.md).
+
 `core/` never imports `adapters/`. The dependency arrow points one way, into
 the core, which is why the test suite runs with no network, no API key and no
 dataset.
