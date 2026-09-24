@@ -93,6 +93,79 @@ def test_feedback_validation(client, payload, error):
     assert response.json()["error"] == error
 
 
+def test_feedback_corrections_round_trip(client):
+    """"Fix a value": PUT /api/feedback's schema, extended additively with
+    an optional `corrections` map (api/_feedback.py)."""
+    signup(client)
+    saved = client.put(
+        "/api/feedback",
+        json={
+            "key": "mine:mail-1",
+            "verdict": "confirmed",
+            "note": "",
+            "corrections": {"consignee": {"si": "EAST BRIGHT FZ-LLC", "bl": "EAST BRIGHT FZ-LLC"}},
+        },
+    )
+    assert saved.status_code == 200
+    record = saved.json()["review"]
+    assert record["corrections"] == {"consignee": {"si": "EAST BRIGHT FZ-LLC", "bl": "EAST BRIGHT FZ-LLC"}}
+
+    listed = client.get("/api/feedback")
+    assert listed.json()["reviews"]["mine:mail-1"]["corrections"] == record["corrections"]
+
+
+def test_feedback_corrections_are_additive_when_omitted(client):
+    """A later PUT that doesn't mention `corrections` (every caller before
+    this feature existed) must not silently erase a saved correction."""
+    signup(client)
+    client.put(
+        "/api/feedback",
+        json={
+            "key": "mine:mail-1",
+            "verdict": "confirmed",
+            "note": "",
+            "corrections": {"consignee": {"si": "A", "bl": "B"}},
+        },
+    )
+    saved = client.put(
+        "/api/feedback",
+        json={"key": "mine:mail-1", "verdict": "confirmed", "note": "updated note"},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["review"]["corrections"] == {"consignee": {"si": "A", "bl": "B"}}
+    assert saved.json()["review"]["note"] == "updated note"
+
+
+def test_feedback_corrections_reject_unknown_field(client):
+    signup(client)
+    resp = client.put(
+        "/api/feedback",
+        json={
+            "key": "mine:mail-1",
+            "verdict": "confirmed",
+            "note": "",
+            "corrections": {"not_a_real_field": {"si": "A", "bl": "B"}},
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_corrections"
+
+
+def test_feedback_corrections_reject_oversized_values(client):
+    signup(client)
+    resp = client.put(
+        "/api/feedback",
+        json={
+            "key": "mine:mail-1",
+            "verdict": "confirmed",
+            "note": "",
+            "corrections": {"consignee": {"si": "x" * 501, "bl": "y"}},
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_corrections"
+
+
 def test_feedback_caps_lengths(client):
     signup(client)
     response = client.put(
