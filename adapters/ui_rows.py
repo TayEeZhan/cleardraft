@@ -27,6 +27,7 @@ from core.extract import extract
 from core.recheck import recheck
 from core.reply import FIELD_LABELS, _reference, draft_reply, draft_recheck_reply
 from core.types import COMPARE_FIELDS
+from core.units import describe_unit_difference, parse_weight
 
 
 def _fv(field_value, source: str) -> "dict | None":
@@ -40,6 +41,24 @@ def _fv(field_value, source: str) -> "dict | None":
         "decided_by": field_value.decided_by,
         "source": source,
     }
+
+
+def _unit_fields(c) -> dict:
+    """{"unit_note", "unit_kg"} for a gross_weight_kg comparison whose two
+    sides are the same weight written in different units - e.g. "22 MT" vs
+    "22,000 KG" -> {"unit_note": "MT vs KG", "unit_kg": 22000}. Both None for
+    every other field, or when either side is missing. Never raises - mirrors
+    core.units.describe_unit_difference/parse_weight's own no-raise contract.
+    Mirrors api/index.py's `_unit_fields` so the two producers stay identical
+    in shape (see that module's _fv docstring for the same convention).
+    """
+    if c.field != "gross_weight_kg" or c.si is None or c.bl is None:
+        return {"unit_note": None, "unit_kg": None}
+    unit_note = describe_unit_difference(c.si.value, c.bl.value)
+    if unit_note is None:
+        return {"unit_note": None, "unit_kg": None}
+    w = parse_weight(c.si.value)
+    return {"unit_note": unit_note, "unit_kg": (w.kg if w is not None else None)}
 
 
 def _doc(doc, rel: Callable[[str], str]) -> "dict | None":
@@ -161,6 +180,7 @@ def build_rows(
                 "undecidable": c.undecidable,
                 "si": _fv(c.si, rel(si.path) if si else ""),
                 "bl": _fv(c.bl, rel(bl.path) if bl else ""),
+                **_unit_fields(c),
             })
 
         recheck_block = None
