@@ -92,8 +92,12 @@ Liveness plus enough to prove the pipeline can actually run.
 {
   "status": "ok",
   "model_available": false,
+  "accounts": true,
   "parsers": ["txt", "pdf", "xlsx", "docx"],
-  "missing_parsers": {}
+  "missing_parsers": {},
+  "commit": "a1b2c3d",
+  "model": "claude-haiku-4-5",
+  "model_switch": "on"
 }
 ```
 
@@ -101,7 +105,14 @@ Liveness plus enough to prove the pipeline can actually run.
 API key is configured. `parsers` / `missing_parsers` come from
 `core.parsers.supported()` / `core.parsers.MISSING_PARSERS`: an optional
 third-party library that failed to import shows up here instead of failing
-silently the first time someone uploads that file type.
+silently the first time someone uploads that file type. `commit` is the
+first 7 characters of `VERCEL_GIT_COMMIT_SHA` (Vercel sets this at build
+time), or `"local"` outside Vercel, so two live deploys can be told apart at
+a glance. `model` is the exact model ID from `adapters.model.MODEL`.
+`model_switch` is `"off"` when `CLEARDRAFT_USE_MODEL=0` and `"on"`
+otherwise (`adapters.model.switch_enabled()`) — distinct from
+`model_available`, since the switch can be on with no key configured, in
+which case `model_available` is still `false`.
 
 ---
 

@@ -1,5 +1,7 @@
 # ClearDraft
 
+[![test](https://github.com/TayEeZhan/cleardraft/actions/workflows/test.yml/badge.svg)](https://github.com/TayEeZhan/cleardraft/actions/workflows/test.yml)
+
 **Shipping document verification for a shared operations inbox.**
 Averis x Monash Hackathon 2026.
 

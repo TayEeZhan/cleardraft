@@ -21,6 +21,36 @@ def test_container_count_discards_size_but_not_quantity() -> None:
     )
 
 
+def test_container_count_plain_values() -> None:
+    assert normalise_container_count("6") == 6
+    assert normalise_container_count("6 CONTAINERS") == 6
+    assert normalise_container_count("") is None
+    assert normalise_container_count(None) is None
+
+
+def test_container_count_sums_mixed_groups() -> None:
+    # A shipment split across two container types is a TOTAL, not the
+    # leading group's quantity alone - both used to normalise to 2.
+    assert normalise_container_count("2 x 40HC + 1 x 20GP") == 3
+    assert normalise_container_count("2 x 40HC + 3 x 20GP") == 5
+    # A real defect (3 vs 5) must not be swallowed by only reading the
+    # leading integer.
+    assert normalise_container_count(
+        "2 x 40HC + 1 x 20GP"
+    ) != normalise_container_count("2 x 40HC + 3 x 20GP")
+
+
+def test_container_count_same_totals_match() -> None:
+    # Different splits that add up the same are the same total quantity.
+    assert normalise_container_count("2 x 40HC + 2 x 20GP") == normalise_container_count(
+        "3 x 40HC + 1 x 20GP"
+    )
+
+
+def test_container_count_accepts_comma_separated_groups() -> None:
+    assert normalise_container_count("1 X 20GP, 2 X 40HC") == 3
+
+
 def test_weight_accepts_formatted_and_raw_xlsx_values() -> None:
     assert normalise_weight("21,577 KG") == 21577
     assert normalise_weight("21577") == 21577

@@ -48,6 +48,16 @@ _ENTITY_TAIL = re.compile(r"\s*[|\n\r]\s*")
 _TRAILING_LOCODE = re.compile(r"\s*\(\s*[A-Za-z]{2}[A-Za-z0-9]{3}\s*\)\s*$")
 _WHITESPACE = re.compile(r"\s+")
 _LEADING_INT = re.compile(r"\d+")
+#: The quantity in an "N x <type>" group, e.g. the "2" in "2 x 40HC", the "1"
+#: in "1 X 20GP". Matches only a digit run immediately (whitespace aside)
+#: followed by one of the four multiplication signs seen in the dataset, so
+#: it never fires on the container SIZE/TYPE itself ("40HC", "20GP", "45'HC"
+#: contain no "x") or on a bare weight. One "N x" per group is all a group
+#: ever has, so finding every occurrence anywhere in the text and summing
+#: their quantities is equivalent to summing group-by-group, without having
+#: to first split on the separators ("+", ",", "&", "and", a newline) that
+#: can appear between groups.
+_COUNT_TERM = re.compile(r"(\d+)\s*[xX×*]")
 #: keep digits and both separators; strip units ("KG", "KGS", "MT") and spaces
 _WEIGHT_NOISE = re.compile(r"[^\d.,]")
 #: "21.577" is twenty-one thousand in European notation, not 21.577. Matches
@@ -145,10 +155,27 @@ def normalise_container_count(value: str) -> "int | None":
 
     Documents write "6 x 40'HC". Only the 6 is compared - container SIZE is
     not one of the seven fields, and including it would invent defects.
+
+    A shipment can span more than one container type: "2 x 40HC + 1 x 20GP".
+    The comparable quantity is the TOTAL container count, so every "N x
+    <type>" group is summed ("+", ",", "&", "and" and newlines all separate
+    groups in the documents we have seen) - "2 x 40HC + 1 x 20GP" is 3, and
+    "2 x 40HC + 3 x 20GP" is 5, so the two are correctly told apart instead
+    of both collapsing to the leading "2". Container size/type is still
+    discarded either way; only the quantities in front of each "x" are read.
+
+    When the text has no "N x" pattern at all - a bare "6", "6 CONTAINERS" -
+    this falls back to the old leading-integer rule.
     """
     text = _as_text(value)
     if text is None:
         return None
+    terms = _COUNT_TERM.findall(text)
+    if terms:
+        try:
+            return sum(int(term) for term in terms)
+        except ValueError:
+            return None
     m = _LEADING_INT.match(text)
     if not m:
         return None

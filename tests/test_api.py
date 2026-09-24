@@ -38,6 +38,10 @@ def test_health_returns_ok():
     assert isinstance(body["model_available"], bool)
     assert isinstance(body["parsers"], list)
     assert isinstance(body["missing_parsers"], dict)
+    assert isinstance(body["commit"], str) and len(body["commit"]) <= 7
+    assert body["model"] == "claude-haiku-4-5"
+    # tests/conftest.py sets CLEARDRAFT_USE_MODEL=0 for the whole suite.
+    assert body["model_switch"] == "off"
 
 
 def test_mismatching_pair_reports_defects():

@@ -1,0 +1,36 @@
+name: test
+
+# Every dependency in requirements.txt (openpyxl, python-docx, pdfplumber,
+# anthropic, fastapi, uvicorn[standard], pydantic, python-multipart) ships
+# prebuilt wheels for ubuntu-latest + Python 3.12, so no apt packages are
+# needed here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # The model tier must stay off in CI: no network call, no API spend,
+      # the same answer every run - same rule tests/conftest.py enforces
+      # for a local run of the suite.
+      CLEARDRAFT_USE_MODEL: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
