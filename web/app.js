@@ -15,8 +15,45 @@ let QUERY = "";
    only. Same row/detail shapes as the sample DATA, so every render helper
    below can treat either source identically. */
 let MINE = { board: [], detail: {} };
-let SRC = "mine"; // "mine" | "sample" — which source the inbox view shows
+let SRC = "mine"; // "mine" | "sample" | "uploaded" — which source the inbox view shows
 let UPLOADING = false;
+
+/* "Uploaded: <name>" — the company's own dataset (.zip), processed live by
+   POST /api/process-dataset. Same board/detail shapes as MINE/DATA, plus
+   `name` (the zip's filename, shown in the source switch) and `submission`
+   (the server's own organiser-format export, used verbatim by the
+   Submission JSON export for this source — see initExportMenu()). A
+   brand-new visitor sees no uploaded source at all until they upload one:
+   loadUploaded() returns this same empty shape when nothing is saved. */
+function emptyUploaded() {
+  return { name: null, board: [], detail: {}, submission: {}, stats: null, seconds: null, model_calls: null };
+}
+
+function loadUploaded() {
+  try {
+    const raw = localStorage.getItem("cleardraft.uploaded.v1");
+    if (!raw) return emptyUploaded();
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.board) && parsed.detail
+      && typeof parsed.detail === "object" && parsed.name) return parsed;
+  } catch { /* corrupt or inaccessible storage — start empty */ }
+  return emptyUploaded();
+}
+
+/* Returns true on success, false when the browser refused to store it (over
+   quota, private mode, storage disabled, ...) — the caller then tells the
+   visitor it will not survive a refresh, rather than pretending it saved. */
+function saveUploaded() {
+  try {
+    if (!UPLOADED.name) { localStorage.removeItem("cleardraft.uploaded.v1"); return true; }
+    localStorage.setItem("cleardraft.uploaded.v1", JSON.stringify(UPLOADED));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let UPLOADED = emptyUploaded();
 
 /* Accounts are optional: the site works exactly as it always has when they
    are unavailable or the visitor is signed out. `available` is null until
@@ -31,13 +68,13 @@ let ACCOUNT = { available: null, user: null };
    case. Both are cleared on sign-out and whenever a pair is created,
    edited or removed — the one rule is re-applied fresh after every change. */
 let PAIRS = [];
-const EVAL_CACHE = { mine: new Map(), sample: new Map() };
+const EVAL_CACHE = { mine: new Map(), sample: new Map(), uploaded: new Map() };
 const MAX_PAIRS = 500;
 
 function invalidateEvalCache() {
   EVAL_CACHE.mine.clear();
   EVAL_CACHE.sample.clear();
-  BOARD_BATCH_TRIED = { mine: false, sample: false };
+  BOARD_BATCH_TRIED = { mine: false, sample: false, uploaded: false };
 }
 
 async function loadPairs() {
@@ -132,14 +169,23 @@ migrateDoneList();
    (see navigateToCase() below for why that can't just be a direct focus() call). */
 let FOCUS_CASE_HEADING = false;
 
-function getReview(id) { return REVIEWS[id] || null; }
-function isReviewed(id) { return Boolean(REVIEWS[id]); }
-function setReview(id, verdict, note) {
-  REVIEWS[id] = { verdict, note: note || "", at: new Date().toISOString() };
+/* Review verdicts are keyed by email_id, and email_ids can collide between
+   the uploaded dataset and the sample inbox (both may have "email_004") —
+   an uploaded dataset runs the same batch pipeline over the organiser's own
+   id scheme. `mine`'s ids are always server-generated ("up_" + a content
+   hash) and never collide with anything, so only "uploaded" needs its own
+   namespace; "mine" and "sample" keep their original, unprefixed keys so
+   reviews saved before this feature existed keep working unchanged. */
+function reviewKey(source, id) { return source === "uploaded" ? `uploaded:${id}` : id; }
+
+function getReview(source, id) { return REVIEWS[reviewKey(source, id)] || null; }
+function isReviewed(source, id) { return Boolean(REVIEWS[reviewKey(source, id)]); }
+function setReview(source, id, verdict, note) {
+  REVIEWS[reviewKey(source, id)] = { verdict, note: note || "", at: new Date().toISOString() };
   saveReviews();
 }
-function clearReview(id) {
-  delete REVIEWS[id];
+function clearReview(source, id) {
+  delete REVIEWS[reviewKey(source, id)];
   saveReviews();
 }
 
@@ -174,6 +220,10 @@ function getSourceKey() {
   try {
     const s = localStorage.getItem("cleardraft.source");
     if (s === "mine" || s === "sample") return s;
+    // "uploaded" is only a valid restored choice while there is still an
+    // uploaded dataset to show — a brand-new visitor (or one who removed
+    // it) must never land on a source that no longer exists.
+    if (s === "uploaded" && UPLOADED.name) return s;
   } catch { /* fall through to the default */ }
   return "mine";
 }
@@ -183,9 +233,45 @@ function setSourceKey(s) {
   try { localStorage.setItem("cleardraft.source", s); } catch { /* per-viewer convenience only */ }
 }
 
-function activeBoard() { return SRC === "mine" ? MINE.board : DATA.board; }
+/* One board/detail lookup per source, everywhere — "mine" (MINE), "sample"
+   (DATA) and "uploaded" (UPLOADED) all share this shape. */
+function boardFor(source) {
+  if (source === "mine") return MINE.board;
+  if (source === "uploaded") return UPLOADED.board;
+  return DATA ? DATA.board : [];
+}
+function detailFor(source, id) {
+  if (source === "mine") return MINE.detail[id];
+  if (source === "uploaded") return UPLOADED.detail[id];
+  return DATA && DATA.detail[id];
+}
 
-function lookupDetail(id) { return MINE.detail[id] || (DATA && DATA.detail[id]); }
+function activeBoard() { return boardFor(SRC); }
+
+/* Every source, active one first — an email_id can collide between the
+   uploaded dataset and the sample inbox (both may run through the same
+   organiser id scheme), so whichever source is actually on screen must
+   always win when resolving a bare id. */
+function sourceSearchOrder() {
+  const order = [SRC, "mine", "sample", "uploaded"];
+  return order.filter((s, i) => order.indexOf(s) === i);
+}
+
+function findRowById(id) {
+  for (const source of sourceSearchOrder()) {
+    const row = boardFor(source).find((r) => r.email_id === id);
+    if (row) return { row, source };
+  }
+  return null;
+}
+
+function lookupDetail(id) {
+  for (const source of sourceSearchOrder()) {
+    const d = detailFor(source, id);
+    if (d) return d;
+  }
+  return undefined;
+}
 
 /* Shapes a saved-case detail object into what POST /api/equivalences/
    evaluate expects: the fields it reads (email_id, from, subject, body,
@@ -274,7 +360,7 @@ async function evaluateCheckLive(d) {
    given source, so the board's tabs/counts/tags can reflect marked pairs
    without a request per row. Any failure leaves the cache untouched — the
    board then silently falls back to checked results, per the plan. */
-let BOARD_BATCH_TRIED = { mine: false, sample: false };
+let BOARD_BATCH_TRIED = { mine: false, sample: false, uploaded: false };
 
 /* The server caps the WHOLE evaluate request at MAX_EVALUATE_BODY_CHARS
    (api/_equivalences.py: 20,000 characters for json.dumps(cases), not per
@@ -325,12 +411,12 @@ async function postEvaluateChunk(cases, draft) {
 async function evaluateBoardBatch(source) {
   if (!ACCOUNT.user || !PAIRS.length) return false;
   if (BOARD_BATCH_TRIED[source]) return false;
-  const board = source === "mine" ? MINE.board : (DATA ? DATA.board : []);
+  const board = boardFor(source);
   const cache = EVAL_CACHE[source];
   const candidateDetails = [];
   for (const row of board) {
     if (cache.has(row.email_id)) continue;
-    const detail = source === "mine" ? MINE.detail[row.email_id] : DATA && DATA.detail[row.email_id];
+    const detail = detailFor(source, row.email_id);
     if (!detail) continue;
     const hasLearnedRow = (detail.comparisons || []).some((c) => c.learned);
     if (row.status === "MISMATCH" || hasLearnedRow) candidateDetails.push(detail);
@@ -402,12 +488,12 @@ function renderBoard() {
 
   for (const r of rows.slice(0, 200)) {
     const a = el("a", "case");
-    const rowReview = getReview(r.email_id);
+    const rowReview = getReview(SRC, r.email_id);
     // A "problem found" on a needs-a-human case is not a clean check —
     // ClearDraft never rendered a verdict there for the clerk to rubber
     // stamp, so it must not look like a routine "Done" row.
     const problemFound = Boolean(rowReview && rowReview.verdict === "done" && rowReview.note && rowReview.note.startsWith("problem:"));
-    if (isReviewed(r.email_id) && !problemFound) a.classList.add("case-done");
+    if (isReviewed(SRC, r.email_id) && !problemFound) a.classList.add("case-done");
     a.href = `#/case/${r.email_id}`;
     a.setAttribute("role", "listitem");
     a.append(el("div", "case-ref", r.reference));
@@ -480,7 +566,7 @@ function updateTabCounts() {
        says "46, Discrepancy found, 12 left" rather than splitting the
        number from its label. */
     const tabRows = rows.filter((r) => tabOf(r) === k);
-    const reviewedInTab = tabRows.filter((r) => isReviewed(r.email_id)).length;
+    const reviewedInTab = tabRows.filter((r) => isReviewed(SRC, r.email_id)).length;
     let leftSpan = n.parentElement && n.parentElement.querySelector(".tab-left");
     if (reviewedInTab > 0) {
       if (!leftSpan) {
@@ -662,11 +748,9 @@ function printButton() {
 
 /* ── Export ─────────────────────────────────────────────────────
    Client-side only — everything here reads from the already-loaded
-   board/detail data (mine or sample), builds rows, and triggers a
-   Blob download. No request ever leaves the browser. */
-
-function boardForSource(source) { return source === "mine" ? MINE.board : (DATA ? DATA.board : []); }
-function detailForSource(source, id) { return source === "mine" ? MINE.detail[id] : (DATA && DATA.detail[id]); }
+   board/detail data (mine, sample or uploaded), builds rows, and triggers a
+   Blob download. No request ever leaves the browser. boardFor/detailFor are
+   defined earlier, shared with the board view and case routing. */
 
 const CSV_HEADERS = [
   "email_id", "reference", "subject", "from", "category", "status", "review_reason",
@@ -736,14 +820,14 @@ function noComparisonExplanation(row) {
   return `Not a document check (${String(row.category || "").replace(/_/g, " ").toLowerCase()})`;
 }
 
-function reviewColumnsFor(id) {
-  const r = getReview(id);
+function reviewColumnsFor(source, id) {
+  const r = getReview(source, id);
   if (!r) return { human_review: "", human_note: "", reviewed_at: "" };
   return { human_review: r.verdict, human_note: r.note || "", reviewed_at: r.at || "" };
 }
 
-function baseExportRow(row, detail) {
-  const rv = reviewColumnsFor(row.email_id);
+function baseExportRow(row, detail, source) {
+  const rv = reviewColumnsFor(source, row.email_id);
   return {
     email_id: row.email_id,
     reference: row.reference,
@@ -765,7 +849,7 @@ function fieldExportRow(row, detail, c, source) {
   const pairId = covered[c.field];
   const pair = pairId ? pairById(pairId) : null;
   return {
-    ...baseExportRow(row, detail),
+    ...baseExportRow(row, detail, source),
     field: c.label,
     field_result: fieldResultOf(c),
     si_value: (c.si && c.si.value) || "",
@@ -778,9 +862,9 @@ function fieldExportRow(row, detail, c, source) {
   };
 }
 
-function noComparisonExportRow(row, detail) {
+function noComparisonExportRow(row, detail, source) {
   return {
-    ...baseExportRow(row, detail),
+    ...baseExportRow(row, detail, source),
     field: "", field_result: "", si_value: "", bl_value: "", si_source: "", bl_source: "",
     explanation: noComparisonExplanation(row),
   };
@@ -791,8 +875,8 @@ function noComparisonExportRow(row, detail) {
    organiser submission (buildSubmissionJson) never uses this. */
 function buildDiscrepancyRows(source) {
   const rows = [];
-  for (const row of boardForSource(source)) {
-    const detail = detailForSource(source, row.email_id);
+  for (const row of boardFor(source)) {
+    const detail = detailFor(source, row.email_id);
     const comparisons = (detail && detail.comparisons) || [];
     const covered = coveredFieldsFor(source, row.email_id);
     if (comparisons.length) {
@@ -801,7 +885,7 @@ function buildDiscrepancyRows(source) {
         if (c.undecidable || !c.matched) rows.push(fieldExportRow(row, detail, c, source));
       }
     } else if (row.status === "NEEDS_REVIEW") {
-      rows.push(noComparisonExportRow(row, detail));
+      rows.push(noComparisonExportRow(row, detail, source));
     }
   }
   return rows;
@@ -809,23 +893,28 @@ function buildDiscrepancyRows(source) {
 
 function buildFullResultsRows(source) {
   const rows = [];
-  for (const row of boardForSource(source)) {
-    const detail = detailForSource(source, row.email_id);
+  for (const row of boardFor(source)) {
+    const detail = detailFor(source, row.email_id);
     const comparisons = (detail && detail.comparisons) || [];
     if (comparisons.length) {
       for (const c of comparisons) rows.push(fieldExportRow(row, detail, c, source));
     } else {
-      rows.push(noComparisonExportRow(row, detail));
+      rows.push(noComparisonExportRow(row, detail, source));
     }
   }
   return rows;
 }
 
 /* {category, status, review_reason, defect_fields, has_defect} in exactly
-   that key order, matching the organiser's sample_submission format. */
+   that key order, matching the organiser's sample_submission format. For the
+   uploaded source this is never called — its submission export is the
+   server's own `submission` block from POST /api/process-dataset, returned
+   verbatim, since that already IS the organiser-format record for a run
+   nothing here re-ran or re-scored. */
 function buildSubmissionJson(source) {
+  if (source === "uploaded") return UPLOADED.submission || {};
   const out = {};
-  for (const row of boardForSource(source)) {
+  for (const row of boardFor(source)) {
     out[row.email_id] = {
       category: row.category,
       status: row.status,
@@ -982,7 +1071,7 @@ function caseCsvButton(d) {
     const comparisons = d.comparisons || [];
     const rows = comparisons.length
       ? comparisons.map((c) => fieldExportRow(boardRow, d, c, source))
-      : [noComparisonExportRow(boardRow, d)];
+      : [noComparisonExportRow(boardRow, d, source)];
     downloadCsv(rows, `case-${d.email_id}`);
     toast("CSV downloaded.");
   });
@@ -1634,23 +1723,14 @@ function replyCard(d, text, title, earlier, redrafted = false) {
 }
 
 /* ── Done — next case ───────────────────────────────────────────
-   Which board (Your mail / Sample) a case belongs to, and its filtered
-   list order — the exact order renderBoard() shows for that source, tab
-   and search query — so "Done — next" / "Skip" walk the list a clerk was
-   actually looking at, not some other order. */
-function boardFor(source) { return source === "mine" ? MINE.board : (DATA ? DATA.board : []); }
-
+   Which board (Your mail / Sample / Uploaded) a case belongs to, and its
+   filtered list order — the exact order renderBoard() shows for that
+   source, tab and search query — so "Done — next" / "Skip" walk the list a
+   clerk was actually looking at, not some other order. boardFor/findRowById
+   are defined earlier, shared with the board view and export. */
 function computeFilteredList(source, tab, query) {
   const q = (query || "").trim().toLowerCase();
   return boardFor(source).filter((r) => tabOf(r) === tab && matchesQuery(r, q));
-}
-
-function findRowById(id) {
-  const m = MINE.board.find((r) => r.email_id === id);
-  if (m) return { row: m, source: "mine" };
-  const s = DATA && DATA.board.find((r) => r.email_id === id);
-  if (s) return { row: s, source: "sample" };
-  return null;
 }
 
 /* If the case is part of the list currently on screen (same source, tab and
@@ -1674,11 +1754,11 @@ function getCaseListContext(id) {
 /* The next row, in list order, that has not been reviewed — wrapping
    around once. Returns -1 when every other row (and the current one) is
    already reviewed. */
-function nextUnreviewedIndex(list, fromIdx) {
+function nextUnreviewedIndex(list, fromIdx, source) {
   const n = list.length;
   for (let step = 1; step <= n; step++) {
     const idx = (fromIdx + step) % n;
-    if (!isReviewed(list[idx].email_id)) return idx;
+    if (!isReviewed(source, list[idx].email_id)) return idx;
   }
   return -1;
 }
@@ -1724,7 +1804,7 @@ function advanceCase(id, context, { requireUndone, undoAction }) {
     navigateToCase(list[(idx + 1) % list.length].email_id);
     return;
   }
-  const nextIdx = nextUnreviewedIndex(list, idx);
+  const nextIdx = nextUnreviewedIndex(list, idx, source);
   if (nextIdx !== -1) { navigateToCase(list[nextIdx].email_id); return; }
 
   /* Every discrepancy in this source is reviewed. Rather than dump the
@@ -1735,9 +1815,9 @@ function advanceCase(id, context, { requireUndone, undoAction }) {
      by the current search is still an unreviewed case, so an active filter
      must not trigger the roll-over early. */
   if (tab === "mismatch") {
-    const anyUnreviewedMismatch = computeFilteredList(source, "mismatch", "").some((r) => !isReviewed(r.email_id));
+    const anyUnreviewedMismatch = computeFilteredList(source, "mismatch", "").some((r) => !isReviewed(source, r.email_id));
     if (!anyUnreviewedMismatch) {
-      const needsReview = computeFilteredList(source, "needs_review", "").find((r) => !isReviewed(r.email_id));
+      const needsReview = computeFilteredList(source, "needs_review", "").find((r) => !isReviewed(source, r.email_id));
       if (needsReview) {
         TAB = "needs_review";
         for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === "needs_review"));
@@ -1756,10 +1836,10 @@ function advanceCase(id, context, { requireUndone, undoAction }) {
    already moved to the next case. Returns the action object so a caller that
    goes on to call advanceCase() can hand the same Undo to whatever toast
    advanceCase shows next (see advanceCase's undoAction param). */
-function confirmToast(d, verb) {
+function confirmToast(d, verb, source) {
   const id = d.email_id;
   const ref = d.reference || id;
-  const action = { label: "Undo", onClick: () => { clearReview(id); navigateToCase(id); } };
+  const action = { label: "Undo", onClick: () => { clearReview(source, id); navigateToCase(id); } };
   toast(`${verb} ${ref}`, action);
   return action;
 }
@@ -1836,7 +1916,12 @@ function buildReviewNoteForm(id, saveLabel, onSave) {
 function reviewBar(d) {
   const id = d.email_id;
   const context = getCaseListContext(id);
-  const review = getReview(id);
+  // Which source this case belongs to, for namespacing its review key (an
+  // uploaded dataset can share ids with the sample inbox) — the on-screen
+  // list context already resolved this; fall back to a fresh lookup for a
+  // case opened some other way (e.g. directly from #/case/<id>).
+  const source = (context && context.source) || (findRowById(id) || {}).source || SRC;
+  const review = getReview(source, id);
   const kind = verdictKind(d);
 
   const bar = el("div", "done-bar");
@@ -1858,7 +1943,7 @@ function reviewBar(d) {
     const undoBtn = el("button", "link-btn", "Undo review");
     undoBtn.type = "button";
     undoBtn.addEventListener("click", () => {
-      clearReview(id);
+      clearReview(source, id);
       renderReview(id);
     });
     actions.append(undoBtn);
@@ -1877,8 +1962,8 @@ function reviewBar(d) {
     const checkedBtn = el("button", "btn btn-primary", "I checked — documents agree");
     checkedBtn.type = "button";
     checkedBtn.addEventListener("click", () => {
-      setReview(id, "done", "checked by hand: documents agree");
-      const undo = confirmToast(d, "Checked");
+      setReview(source, id, "done", "checked by hand: documents agree");
+      const undo = confirmToast(d, "Checked", source);
       if (!context) return;
       advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
@@ -1892,8 +1977,8 @@ function reviewBar(d) {
     bar.append(actions);
 
     const noteForm = buildReviewNoteForm(id, "Save and next case", (note) => {
-      setReview(id, "done", `problem: ${note}`);
-      const undo = confirmToast(d, "Problem noted");
+      setReview(source, id, "done", `problem: ${note}`);
+      const undo = confirmToast(d, "Problem noted", source);
       if (!context) return;
       advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
@@ -1916,8 +2001,8 @@ function reviewBar(d) {
     const confirmBtn = el("button", "btn btn-primary", primaryLabel);
     confirmBtn.type = "button";
     confirmBtn.addEventListener("click", () => {
-      setReview(id, "confirmed");
-      const undo = confirmToast(d, "Confirmed");
+      setReview(source, id, "confirmed");
+      const undo = confirmToast(d, "Confirmed", source);
       if (!context) return;
       advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
@@ -1939,8 +2024,8 @@ function reviewBar(d) {
     bar.append(actions);
 
     const noteForm = buildReviewNoteForm(id, "Save and next case", (note) => {
-      setReview(id, "flagged", note);
-      const undo = confirmToast(d, "Flagged");
+      setReview(source, id, "flagged", note);
+      const undo = confirmToast(d, "Flagged", source);
       if (!context) return;
       advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
@@ -1988,19 +2073,20 @@ function initCaseKeyboardNav() {
     if (!d) return;
     const context = getCaseListContext(id);
     if (!context) return;
+    const source = context.source;
     e.preventDefault();
     if (k === "n") {
       advanceCase(id, context, { requireUndone: false });
       return;
     }
-    if (!isReviewed(id) && verdictKind(d) === "review") {
+    if (!isReviewed(source, id) && verdictKind(d) === "review") {
       toast("ClearDraft didn't decide this one — choose an outcome below.");
       return;
     }
     let undo;
-    if (!isReviewed(id)) {
-      setReview(id, "confirmed");
-      undo = confirmToast(d, "Confirmed");
+    if (!isReviewed(source, id)) {
+      setReview(source, id, "confirmed");
+      undo = confirmToast(d, "Confirmed", source);
     }
     advanceCase(id, context, { requireUndone: true, undoAction: undo });
   });
@@ -2080,9 +2166,31 @@ function bars(data) {
   return frag;
 }
 
+/* A link to a reviewed case for the Accuracy page's flagged/problem lists.
+   `f.source` is set when the review came from the uploaded dataset (its ids
+   can collide with the sample inbox's) — the click handler switches the
+   active source first, so #/case/<id> always resolves (and routes) to the
+   SAME row this review was actually about, never a same-numbered row in
+   whichever source happens to be active right now. Plain href kept as a
+   fallback (e.g. opening in a new tab) even though the click handler is
+   what actually drives normal navigation. */
+function reviewedCaseLink(f) {
+  const row = f.source
+    ? boardFor(f.source).find((r) => r.email_id === f.id)
+    : (findRowById(f.id) || {}).row;
+  const a = el("a", null, row ? row.reference : f.id);
+  a.href = `#/case/${f.id}`;
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (f.source) setSourceKey(f.source);
+    navigateToCase(f.id);
+  });
+  return a;
+}
+
 /* "Your checks of ClearDraft's answers" — only shown once at least one
    case has been reviewed. Reviews are a single flat store shared across
-   both sources, so this counts every review regardless of which board it
+   every source, so this counts every review regardless of which board it
    came from. */
 function renderReviewsPanel(host) {
   const ids = Object.keys(REVIEWS);
@@ -2091,12 +2199,20 @@ function renderReviewsPanel(host) {
   let confirmed = 0, flagged = 0;
   const flaggedList = [];
   const problemsFound = [];
-  for (const id of ids) {
-    const r = REVIEWS[id];
+  for (const key of ids) {
+    const r = REVIEWS[key];
+    // Storage keys are namespaced per source (see reviewKey()) so an
+    // uploaded dataset's ids can't collide with the sample inbox's — strip
+    // that back off here, but remember which source it came from so the
+    // link below can still resolve (and route to) the right case.
+    const uploadedPrefix = "uploaded:";
+    const fromUploaded = key.startsWith(uploadedPrefix);
+    const id = fromUploaded ? key.slice(uploadedPrefix.length) : key;
+    const source = fromUploaded ? "uploaded" : null;
     if (r.verdict === "confirmed") confirmed++;
-    else if (r.verdict === "flagged") { flagged++; flaggedList.push({ id, note: r.note }); }
+    else if (r.verdict === "flagged") { flagged++; flaggedList.push({ id, source, note: r.note }); }
     else if (r.verdict === "done" && r.note && r.note.startsWith("problem:")) {
-      problemsFound.push({ id, note: r.note.slice("problem:".length).trim() });
+      problemsFound.push({ id, source, note: r.note.slice("problem:".length).trim() });
     }
   }
   const total = ids.length;
@@ -2112,10 +2228,8 @@ function renderReviewsPanel(host) {
   if (flaggedList.length) {
     const list = el("ul", "reviews-flagged-list");
     for (const f of flaggedList) {
-      const found = findRowById(f.id);
       const li = el("li");
-      const a = el("a", null, found ? found.row.reference : f.id);
-      a.href = `#/case/${f.id}`;
+      const a = reviewedCaseLink(f);
       li.append(a);
       li.append(document.createTextNode(` — ${f.note}`));
       list.append(li);
@@ -2131,10 +2245,8 @@ function renderReviewsPanel(host) {
     panel.append(el("h4", null, "Problems found on escalated cases"));
     const problemList = el("ul", "reviews-flagged-list");
     for (const f of problemsFound) {
-      const found = findRowById(f.id);
       const li = el("li");
-      const a = el("a", null, found ? found.row.reference : f.id);
-      a.href = `#/case/${f.id}`;
+      const a = reviewedCaseLink(f);
       li.append(a);
       li.append(document.createTextNode(` — ${f.note}`));
       problemList.append(li);
@@ -2429,27 +2541,42 @@ function renderHome() {
   }
 }
 
-/* ── Inbox view: Your mail vs the sample company inbox ────────
-   One board view, two data sources. The segmented switch picks the
+/* ── Inbox view: Your mail vs the sample company inbox vs an uploaded
+   dataset ──────────────────────────────────────────────────────
+   One board view, up to three data sources. The segmented switch picks the
    source; everything else (tabs, search, counts, the case list) already
    runs on activeBoard(), so the rest of the render just decides which
    chrome to show — the empty "add your first email" state, or the normal
-   tabs/search/list. */
+   tabs/search/list. A brand-new visitor never sees the "Uploaded" switch at
+   all — it only appears once UPLOADED.name is set (i.e. something has been
+   uploaded this session or restored from localStorage). */
 function renderBoardView() {
   if (!DATA) return;
   const mineCount = MINE.board.length;
   const sampleCount = DATA.board.length;
+  const hasUploaded = Boolean(UPLOADED.name);
 
   $("#mine-count").textContent = mineCount;
   $("#sample-count").textContent = sampleCount;
   $("#switch-mine").setAttribute("aria-pressed", String(SRC === "mine"));
   $("#switch-sample").setAttribute("aria-pressed", String(SRC === "sample"));
 
+  const uploadedSwitch = $("#switch-uploaded");
+  if (uploadedSwitch) {
+    uploadedSwitch.hidden = !hasUploaded;
+    if (hasUploaded) {
+      uploadedSwitch.textContent = `Uploaded: ${UPLOADED.name} (${UPLOADED.board.length})`;
+      uploadedSwitch.setAttribute("aria-pressed", String(SRC === "uploaded"));
+    }
+  }
+
   const lede = $("#board-lede");
   if (SRC === "mine") {
     lede.textContent = mineCount
       ? `Your own mail, ${mineCount} message${mineCount === 1 ? "" : "s"} read by the live pipeline.`
       : "Add your own emails and watch the live pipeline check them.";
+  } else if (SRC === "uploaded") {
+    lede.textContent = `${UPLOADED.board.length} email${UPLOADED.board.length === 1 ? "" : "s"} from "${UPLOADED.name}", processed live on the server — nothing from this dataset is stored there.`;
   } else {
     lede.textContent = `One shared mailbox, ${sampleCount} messages. Every one has been read, sorted, and — where documents were attached — checked field by field.`;
   }
@@ -2458,6 +2585,8 @@ function renderBoardView() {
   $("#board-normal").hidden = showEmpty;
   $("#mine-actions").hidden = SRC !== "mine";
   $("#mine-sample-actions").hidden = !(SRC === "mine" && showEmpty);
+  const uploadedActions = $("#uploaded-actions");
+  if (uploadedActions) uploadedActions.hidden = SRC !== "uploaded";
 
   const showAddMail = SRC === "mine" && (showEmpty || ADDMAIL_OPEN);
   if (showAddMail && !ADDMAIL_TAB_TOUCHED) {
@@ -2500,7 +2629,7 @@ function renderBoardView() {
 function needsYouRows() {
   return activeBoard().filter((r) => {
     const t = tabOf(r);
-    return (t === "mismatch" || t === "needs_review") && !isReviewed(r.email_id);
+    return (t === "mismatch" || t === "needs_review") && !isReviewed(SRC, r.email_id);
   });
 }
 
@@ -2515,7 +2644,7 @@ function reviewedTodayCount() {
   const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   let handled = 0, pairs = 0;
   for (const r of activeBoard()) {
-    const rv = REVIEWS[r.email_id];
+    const rv = REVIEWS[reviewKey(SRC, r.email_id)];
     if (!rv || !rv.at) continue;
     const d = new Date(rv.at);
     if (Number.isNaN(d.getTime())) continue;
@@ -2625,6 +2754,10 @@ function clearUploadPanels() {
   $("#upload-panel").replaceChildren();
   $("#upload-errors").hidden = true;
   $("#upload-errors").replaceChildren();
+  const datasetProgress = $("#dataset-upload-progress");
+  if (datasetProgress) { datasetProgress.hidden = true; datasetProgress.textContent = ""; }
+  const datasetResult = $("#dataset-upload-result");
+  if (datasetResult) { datasetResult.hidden = true; datasetResult.replaceChildren(); }
 }
 
 function showUploadApiMissing() {
@@ -2658,7 +2791,10 @@ function showUploadErrors(errors) {
 
 function setUploadingUI(uploading) {
   UPLOADING = uploading;
-  for (const id of ["add-emails-btn", "try-samples-btn", "clear-mine-btn", "mail-file-input"]) {
+  for (const id of [
+    "add-emails-btn", "try-samples-btn", "clear-mine-btn", "mail-file-input",
+    "dataset-file-input", "remove-uploaded-btn",
+  ]) {
     const node = $(`#${id}`);
     if (node) node.disabled = uploading;
   }
@@ -2807,9 +2943,171 @@ async function trySampleEmails() {
   await uploadFiles(files);
 }
 
+/* ── Upload a dataset (.zip) ────────────────────────────────────
+   POST /api/process-dataset (api/_dataset.py) processes the whole zip live,
+   in one request, and returns board/detail/stats/submission shaped exactly
+   like MINE/DATA — every existing board feature (tabs, search, case pages,
+   review, export) works on the result unchanged because it is read through
+   the same boardFor()/detailFor() this whole file already uses. There is no
+   incremental progress for a single POST, so the progress line is just an
+   elapsed-seconds counter, replaced by a one-line summary the moment the
+   response lands. */
+let DATASET_PROGRESS_TIMER = null;
+
+function stopDatasetProgressTimer() {
+  if (DATASET_PROGRESS_TIMER) { clearInterval(DATASET_PROGRESS_TIMER); DATASET_PROGRESS_TIMER = null; }
+}
+
+function startDatasetProgressTimer(label) {
+  const host = $("#dataset-upload-progress");
+  if (!host) return;
+  host.hidden = false;
+  const started = Date.now();
+  const tick = () => { host.textContent = `${label} — ${((Date.now() - started) / 1000).toFixed(1)}s…`; };
+  tick();
+  stopDatasetProgressTimer();
+  DATASET_PROGRESS_TIMER = setInterval(tick, 200);
+}
+
+function datasetSummaryLine(u) {
+  const mismatches = u.board.filter((r) => r.status === "MISMATCH").length;
+  const needsReview = u.board.filter((r) => r.status === "NEEDS_REVIEW").length;
+  const parts = [
+    `${u.board.length} email${u.board.length === 1 ? "" : "s"}`,
+    `${mismatches} discrepanc${mismatches === 1 ? "y" : "ies"}`,
+    `${needsReview} need${needsReview === 1 ? "s" : ""} a human`,
+  ];
+  if (typeof u.seconds === "number") parts.push(`${u.seconds.toFixed(1)} s`);
+  const calls = typeof u.model_calls === "number" ? u.model_calls : 0;
+  parts.push(`${calls} AI call${calls === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
+
+function renderDatasetResult() {
+  const host = $("#dataset-upload-result");
+  if (!host) return;
+  if (!UPLOADED.name) { host.hidden = true; host.replaceChildren(); return; }
+  host.hidden = false;
+  host.replaceChildren(el("div", "dataset-upload-summary", datasetSummaryLine(UPLOADED)));
+}
+
+async function uploadDataset(file) {
+  if (UPLOADING || !file) return;
+  if (!/\.zip$/i.test(file.name)) { toast("Only a .zip file is supported."); return; }
+
+  setUploadingUI(true);
+  clearUploadPanels();
+  const resultHost = $("#dataset-upload-result");
+  if (resultHost) { resultHost.hidden = true; resultHost.replaceChildren(); }
+  startDatasetProgressTimer(`Processing ${file.name}`);
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  let resp;
+  try {
+    resp = await fetch("/api/process-dataset", { method: "POST", body: fd, credentials: "same-origin" });
+  } catch {
+    stopDatasetProgressTimer();
+    const progress = $("#dataset-upload-progress");
+    if (progress) progress.hidden = true;
+    showUploadApiMissing();
+    setUploadingUI(false);
+    return;
+  }
+
+  stopDatasetProgressTimer();
+  const progress = $("#dataset-upload-progress");
+  if (progress) progress.hidden = true;
+
+  // Same "no live backend" detection as submitProcessEmail().
+  if (resp.status === 404 || resp.status === 405 || resp.status === 501) {
+    showUploadApiMissing();
+    setUploadingUI(false);
+    return;
+  }
+  if (!resp.ok) {
+    const ct = resp.headers.get("content-type") || "";
+    let detail = `HTTP ${resp.status}`;
+    if (ct.includes("json")) {
+      const j = await resp.json().catch(() => ({}));
+      detail = j.detail || j.error || detail;
+    } else {
+      showUploadApiMissing();
+      setUploadingUI(false);
+      return;
+    }
+    showUploadErrors([{ name: file.name, detail }]);
+    setUploadingUI(false);
+    return;
+  }
+
+  const data = await resp.json();
+  UPLOADED = {
+    name: (data.source && data.source.name) || file.name.replace(/\.zip$/i, ""),
+    board: data.board || [],
+    detail: data.details || {},
+    submission: data.submission || {},
+    stats: data.stats || null,
+    seconds: data.source ? data.source.seconds : null,
+    model_calls: data.source ? data.source.model_calls : null,
+  };
+  const persisted = saveUploaded();
+
+  setSourceKey("uploaded");
+  ADDMAIL_OPEN = false;
+  renderBoardView();
+  renderDatasetResult();
+
+  toast(persisted
+    ? `Dataset processed: ${UPLOADED.name}`
+    : "Processed — not saved in this browser (re-upload after refresh).");
+
+  setUploadingUI(false);
+}
+
+function initDatasetUpload() {
+  const input = $("#dataset-file-input");
+  if (input) {
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      if (file) uploadDataset(file);
+      input.value = "";
+    });
+  }
+  const zone = $("#dataset-drop-zone");
+  if (zone) {
+    zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.dataset.drag = "true"; });
+    zone.addEventListener("dragleave", () => { zone.dataset.drag = "false"; });
+    zone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      zone.dataset.drag = "false";
+      if (UPLOADING) return;
+      const files = e.dataTransfer && e.dataTransfer.files;
+      const file = files && files[0];
+      if (file) uploadDataset(file);
+    });
+  }
+  const removeBtn = $("#remove-uploaded-btn");
+  if (removeBtn) {
+    removeBtn.addEventListener("click", () => {
+      if (UPLOADING) return;
+      if (!confirm(`Remove the uploaded dataset "${UPLOADED.name}"? This only removes it from this browser — nothing was ever stored on the server.`)) return;
+      UPLOADED = emptyUploaded();
+      saveUploaded();
+      if (SRC === "uploaded") setSourceKey("mine");
+      renderDatasetResult();
+      renderBoardView();
+      toast("Uploaded dataset removed.");
+    });
+  }
+}
+
 function initSourceSwitch() {
   $("#switch-mine").addEventListener("click", () => switchSource("mine"));
   $("#switch-sample").addEventListener("click", () => switchSource("sample"));
+  const uploadedSwitch = $("#switch-uploaded");
+  if (uploadedSwitch) uploadedSwitch.addEventListener("click", () => switchSource("uploaded"));
 }
 
 function initMineControls() {
@@ -2872,18 +3170,25 @@ function initMineControls() {
   });
 }
 
-/* ── Add mail: "Drop .eml files" / "Paste an email" tabs ────────── */
+/* ── Add mail: "Drop .eml files" / "Paste an email" / "Upload a dataset
+   (.zip)" tabs ────────────────────────────────────────────────── */
 function setAddMailTab(tab) {
   ADDMAIL_TAB = tab;
   $("#addmail-tab-drop").setAttribute("aria-selected", String(tab === "drop"));
   $("#addmail-tab-paste").setAttribute("aria-selected", String(tab === "paste"));
+  const datasetTab = $("#addmail-tab-dataset");
+  if (datasetTab) datasetTab.setAttribute("aria-selected", String(tab === "dataset"));
   $("#addmail-drop").hidden = tab !== "drop";
   $("#addmail-paste").hidden = tab !== "paste";
+  const datasetSection = $("#addmail-dataset");
+  if (datasetSection) datasetSection.hidden = tab !== "dataset";
 }
 
 function initAddMailTabs() {
   $("#addmail-tab-drop").addEventListener("click", () => { ADDMAIL_TAB_TOUCHED = true; setAddMailTab("drop"); });
   $("#addmail-tab-paste").addEventListener("click", () => { ADDMAIL_TAB_TOUCHED = true; setAddMailTab("paste"); });
+  const datasetTab = $("#addmail-tab-dataset");
+  if (datasetTab) datasetTab.addEventListener("click", () => { ADDMAIL_TAB_TOUCHED = true; setAddMailTab("dataset"); });
 }
 
 function resetPasteForm() {
@@ -3563,6 +3868,7 @@ function toast(msg, action) {
 
 (async function boot() {
   MINE = loadMine();
+  UPLOADED = loadUploaded();
   SRC = getSourceKey();
 
   try {
@@ -3580,6 +3886,7 @@ function toast(msg, action) {
   initSourceSwitch();
   initMineControls();
   initAddMailTabs();
+  initDatasetUpload();
   initPasteForm();
   initAccountControl();
   initAccountForm();
