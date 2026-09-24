@@ -43,6 +43,7 @@ from adapters.model import MODEL, STATS  # noqa: E402
 from adapters.model import available as model_available, switch_enabled as model_switch_enabled  # noqa: E402
 from adapters.store import StoreError, get_store  # noqa: E402
 from api._accounts import current_user, router as accounts_router, save_result_to_mailbox  # noqa: E402
+from api._equivalences import lookup_for, router as equivalences_router  # noqa: E402
 from core import parsers  # noqa: E402
 from core.classify import classify  # noqa: E402
 from core.compare import compare  # noqa: E402
@@ -54,6 +55,7 @@ from core.types import Classification, Email  # noqa: E402
 
 app = FastAPI()
 app.include_router(accounts_router)
+app.include_router(equivalences_router)
 
 
 @app.exception_handler(StoreError)
@@ -184,12 +186,14 @@ def _stats_snapshot() -> dict:
 
 @app.post("/api/check")
 async def check(
+    request: Request,
     si: "UploadFile | None" = File(None),
     bl: "UploadFile | None" = File(None),
     subject: str = Form(""),
     body: str = Form(""),
 ):
     started = time.time()
+    known_equal = lookup_for(request)
 
     if si is None or not si.filename:
         return _error(400, "missing_file", "'si' file is required")
@@ -253,7 +257,7 @@ async def check(
         # actually read.
         comparisons = ()
         if si_doc.readable and bl_doc.readable:
-            comparisons = compare(si_doc, bl_doc)
+            comparisons = compare(si_doc, bl_doc, known_equal=known_equal)
 
         decision = decide(email, _FORCED_COMPARE, si_doc, bl_doc, comparisons)
         reply_draft = draft_reply(email, decision)
@@ -267,6 +271,9 @@ async def check(
             "label": FIELD_LABELS.get(c.field, c.field),
             "matched": c.matched,
             "undecidable": c.undecidable,
+            "learned": c.matched and c.si_norm != c.bl_norm,
+            "si_norm": c.si_norm,
+            "bl_norm": c.bl_norm,
             "si": _fv(c.si, si.filename),
             "bl": _fv(c.bl, bl.filename),
         }
@@ -296,7 +303,7 @@ async def check(
     return payload
 
 
-def _process_eml_bytes(data: bytes, upload_name: str) -> "dict | JSONResponse":
+def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict | JSONResponse":
     """The one pipeline: raw .eml bytes in, {board, detail, model_delta} out.
 
     Shared by both `/api/process-email` request shapes - an uploaded .eml
@@ -304,6 +311,10 @@ def _process_eml_bytes(data: bytes, upload_name: str) -> "dict | JSONResponse":
     serialised into the same RFC 5322 bytes first - so there is exactly one
     copy of the classify -> extract -> compare -> decide -> draft_reply
     chain, same as core/pipeline.process and scripts/export_ui_data.py.
+
+    `known_equal`, when given, is api._equivalences.lookup_for(request)'s
+    result - the signed-in caller's learned pairs, or None when signed out
+    or accounts are unavailable. Passed straight through to compare().
 
     Nothing is written anywhere except a per-request tempfile.TemporaryDirectory,
     which is removed before this function returns. No email content is logged.
@@ -364,7 +375,7 @@ def _process_eml_bytes(data: bytes, upload_name: str) -> "dict | JSONResponse":
 
         comparisons = ()
         if si is not None and bl is not None and si.readable and bl.readable:
-            comparisons = compare(si, bl)
+            comparisons = compare(si, bl, known_equal=known_equal)
 
         decision = decide(email_obj, classification, si, bl, comparisons)
         reply_draft = draft_reply(email_obj, decision)
@@ -382,6 +393,9 @@ def _process_eml_bytes(data: bytes, upload_name: str) -> "dict | JSONResponse":
                 "label": FIELD_LABELS.get(c.field, c.field),
                 "matched": c.matched,
                 "undecidable": c.undecidable,
+                "learned": c.matched and c.si_norm != c.bl_norm,
+                "si_norm": c.si_norm,
+                "bl_norm": c.bl_norm,
                 "si": _fv(c.si, _source_name(si)),
                 "bl": _fv(c.bl, _source_name(bl)),
             }
@@ -516,7 +530,8 @@ async def process_email(
         data = bytes(msg)
         upload_name = "Pasted email"
 
-    result = _process_eml_bytes(data, upload_name)
+    known_equal = lookup_for(request)
+    result = _process_eml_bytes(data, upload_name, known_equal=known_equal)
     if isinstance(result, JSONResponse):
         return result
 

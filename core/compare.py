@@ -10,6 +10,9 @@ escalates the email. It is never reported as a match and never as a defect.
 """
 from __future__ import annotations
 
+from typing import Callable
+
+from core.equivalence import EQUIVALENCE_FIELDS
 from core.normalise import normalise
 from core.types import COMPARE_FIELDS, CompareField, ExtractedDoc, FieldComparison, FieldValue
 
@@ -48,8 +51,36 @@ def _normalised(field: CompareField, fv: "FieldValue | None") -> "str | int | No
         return None
 
 
-def compare(si: ExtractedDoc, bl: ExtractedDoc) -> "tuple[FieldComparison, ...]":
-    """Always returns exactly seven rows, in COMPARE_FIELDS order."""
+def _safe_known_equal(
+    known_equal: "Callable[[str, object, object], bool]",
+    field: CompareField,
+    si_norm: "str | int | None",
+    bl_norm: "str | int | None",
+) -> bool:
+    """Call a caller-supplied known_equal, never letting it raise. A learned
+    pair downgrading a mismatch is a nicety; a crash here must never take
+    down a comparison the organiser's scorer depends on."""
+    try:
+        return bool(known_equal(field, si_norm, bl_norm))
+    except Exception:
+        return False
+
+
+def compare(
+    si: ExtractedDoc,
+    bl: ExtractedDoc,
+    *,
+    known_equal: "Callable[[str, object, object], bool] | None" = None,
+) -> "tuple[FieldComparison, ...]":
+    """Always returns exactly seven rows, in COMPARE_FIELDS order.
+
+    `known_equal`, when given, is asked - only for the five learnable text
+    fields, only when both sides are decided - whether a clerk has already
+    approved this exact SI/BL pair as the same. With known_equal=None
+    (scripts/run_pipeline.py, export_ui_data.py, every caller that scores
+    the pipeline) behaviour is byte-identical to before this parameter
+    existed.
+    """
     rows: list[FieldComparison] = []
     for field in COMPARE_FIELDS:
         si_fv = _field_value(si, field)
@@ -65,7 +96,14 @@ def compare(si: ExtractedDoc, bl: ExtractedDoc) -> "tuple[FieldComparison, ...]"
         bl_absent = bl_fv is None or bl_norm is None
 
         undecidable = si_absent or bl_absent
-        matched = (not undecidable) and (si_norm == bl_norm)
+        matched = (not undecidable) and (
+            si_norm == bl_norm
+            or (
+                known_equal is not None
+                and field in EQUIVALENCE_FIELDS
+                and _safe_known_equal(known_equal, field, si_norm, bl_norm)
+            )
+        )
 
         rows.append(
             FieldComparison(

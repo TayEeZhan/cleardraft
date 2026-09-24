@@ -64,6 +64,11 @@ These endpoints are implemented and deployed:
 | `POST /api/mail/import` | Built — merge locally-saved results into the account |
 | `DELETE /api/mail` | Built — clear the saved mailbox |
 | `DELETE /api/mail/{email_id}` | Built — remove one saved email |
+| `GET /api/equivalences` | Built — this account's learned "marked as same" pairs |
+| `POST /api/equivalences` | Built — mark one exact SI/BL wording as the same, with an optional note |
+| `PATCH /api/equivalences/{id}` | Built — edit a pair's wording or note |
+| `DELETE /api/equivalences/{id}` | Built — undo one pair |
+| `POST /api/equivalences/evaluate` | Built — re-apply this account's pairs to already-checked cases, live |
 
 Everything else originally sketched for this contract is **planned, not
 built**: `GET /api/emails`, `GET /api/emails/{email_id}`, `GET /api/stats`,
@@ -234,6 +239,146 @@ model, seconds}`:
   its value is `save_failed`: whatever storage-level failure
   prevented the save, so the check result is still returned instead of a
   500.
+
+---
+
+## Learned equivalences ("marked as same")
+
+A signed-in clerk can mark one exact SI/BL wording, on one of the five text
+fields (`shipper`, `consignee`, `notify_party`, `port_of_loading`,
+`port_of_discharge`), as "the same". That pair is remembered per account
+(`core/equivalence.py`, storage key `equiv:<email>`) and downgrades that
+exact mismatch on future checks (`core/compare.py`'s `known_equal`), and —
+via the `evaluate` endpoint below — on already-checked/saved cases too, live.
+`container_count` and `gross_weight_kg` can never be taught: a numeric
+difference is always a real defect.
+
+### `GET /api/equivalences`
+
+Lists the signed-in account's pairs. Each record now also carries `note`
+(string, `""` if never set) and `updated_at` (ISO UTC string, or `null` if
+never edited) — older records saved before this field existed report `""`
+/ `null`.
+
+### `POST /api/equivalences`
+
+```json
+{"field": "consignee", "si_value": "EAST BRIGHT FZ-LLC", "bl_value": "UAB NOVAKOPA", "note": "renamed after merger", "source": "web-check"}
+```
+
+`note` is optional, ≤ `MAX_NOTE_LENGTH` (280) characters —
+`400 {"error": "note_too_long", ...}` if longer.
+
+The raw `si_value`/`bl_value` may be up to `MAX_INPUT_LENGTH` (2000)
+characters — `400 {"error": "value_too_long", ...}` past that. The
+**normalised** wording (what is actually compared and stored) must still fit
+`MAX_VALUE_LENGTH` (200) characters — a company name with its postal address
+glued onto the same cell can run well past 200 raw characters while
+normalising to a short name, and that pair must still be learnable; the
+200-character cap now applies after normalisation, not before.
+
+Learning an **already-known pair** (same field, same two wordings, either
+order) no longer errors: it returns `200 {"pair": <existing record>,
+"already_marked": true}`. If the existing pair's `note` was empty and this
+request sent a non-empty one, that note is saved onto the existing pair
+(and `updated_at` is set) rather than discarded.
+
+### `PATCH /api/equivalences/{pair_id}`
+
+```json
+{"si_value": "EAST BRIGHT FZ-LLC (RENAMED)", "bl_value": "UAB NOVAKOPA", "note": "renamed after merger"}
+```
+
+Any of `si_value`, `bl_value`, `note` may be sent; omitted ones are left
+unchanged. `field` may be sent but only to confirm it — a `field` that
+differs from the pair's stored field is rejected:
+
+| `error` | Status | When |
+|---|---|---|
+| `field_immutable` | 400 | `field` sent and different from the stored field |
+| `note_too_long` | 400 | `note` over 280 characters |
+| `value_too_long` | 400 | raw wording over 2000 chars, or normalised wording over 200 |
+| `invalid_pair` | 400 | new wording is blank, or both sides normalise the same |
+| `duplicate_pair` | 409 | the new wording clashes with **another** saved pair (same field, same normalised pair) |
+| `not_found` | 404 | no such id on this account (including another account's id) |
+| `not_signed_in` | 401 | signed out |
+| `accounts_unavailable` | 503 | storage not configured |
+
+On success, wording changes are re-normalised with the pair's (unchanged)
+field and re-validated with the same `can_learn` rule as `POST`. `updated_at`
+is set to the current time on every successful edit, including a note-only
+edit.
+
+### `POST /api/equivalences/evaluate`
+
+Re-applies "the one rule" (see `core/equivalence.evaluate_case`) to a batch
+of already-checked/saved cases, live, using the signed-in account's current
+pairs — this is what lets the inbox and a saved mailbox case re-count
+without re-running the pipeline, and without ever touching the organiser's
+scored `submission.json`.
+
+```json
+{"cases": [ { "email_id": "...", "status": "MISMATCH", "category": "BL_COMPARISON", "review_reason": null, "defect_fields": ["consignee"], "comparisons": [...], "recheck": {...} } ], "draft": false}
+```
+
+Each case is the same shape as one entry of `web/public/data.json`'s
+`detail` map (or `POST /api/check`'s response). `draft: true` additionally
+requires the case to carry `from`/`subject`/`body` and requires **exactly
+one** case in the request.
+
+**Caps**, all `400`:
+
+| `error` | When |
+|---|---|
+| `too_many_cases` | more than 600 cases |
+| `too_many_rows` | a case has more than 7 comparison rows, or more than 7 recheck rows |
+| `value_too_long` | any comparison row's si/bl `value` exceeds 2000 characters |
+| `body_too_long` | a case's `body` exceeds 20,000 characters |
+| `body_too_large` | the whole `cases` array serialises past 20,000 characters |
+| `draft_requires_one_case` | `draft: true` with zero or more than one case |
+| `invalid_case` | a case is not a JSON object |
+
+Auth: `401 not_signed_in` signed out, `503 accounts_unavailable` when
+storage isn't configured — same as every other equivalences route.
+
+**200 response**:
+
+```json
+{
+  "cases": [
+    {
+      "email_id": "email_004",
+      "status": "MISMATCH",
+      "defect_fields": ["notify_party"],
+      "has_defect": true,
+      "changed": true,
+      "rows": {"consignee": "a1b2c3d4"},
+      "recheck": {},
+      "reply_draft": "Hi Mitchelle, ... (only when draft:true and changed)",
+      "recheck_reply_draft": "... (only when draft:true, changed, and the case has recheck rows)"
+    }
+  ]
+}
+```
+
+`rows` maps each comparison field **covered by a saved pair** to that pair's
+id (fields with no covering pair are simply absent). `recheck` maps each
+recheck field whose outcome changed (`still_wrong`/`newly_broken` → `ok`) to
+`{"outcome": "ok", "pair_id": "..."}`. `changed` is true when the effective
+status, effective defect fields, or any recheck outcome differs from what
+was checked. Results come back **in the same order as the request**.
+
+`reply_draft` / `recheck_reply_draft` are built by reconstructing
+`Email`/`FieldValue`/`FieldComparison`/`Decision`/`RecheckRow` from the
+submitted JSON and calling the real, unmodified `core.reply.draft_reply` /
+`draft_recheck_reply` — never a re-implementation of the template logic.
+Any reconstruction problem simply omits that draft for that case; it never
+turns into a 500.
+
+`NEEDS_REVIEW` cases and non-`BL_COMPARISON` cases are always returned with
+their checked status/defects unchanged (marking a pair can't fix an
+unreadable file or a blank field) — only their `rows`/`recheck` maps may
+still note a covered field for display purposes upstream.
 
 ---
 

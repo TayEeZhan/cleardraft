@@ -21,6 +21,8 @@
   --mismatch-bg:#FBEAE8;
   --review:     #6C4BB6;
   --review-bg:  #EFEAF8;
+  --marked:     #14395E;
+  --marked-bg:  #E9EEF5;
 
   --display: 'Archivo', system-ui, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
@@ -97,8 +99,9 @@ a { color: inherit; }
   padding: 8px 14px; min-height: 44px; cursor: pointer; white-space: nowrap;
 }
 .account-btn:hover { background: var(--surface); border-color: var(--ink-3); }
+.account-user-wrap { display: flex; align-items: center; gap: 8px; }
 .account-user-wrap[hidden] { display: none; }
-.account-email-btn { max-width: 140px; display: inline-flex; }
+.account-email-btn { max-width: 140px; display: inline-flex; align-items: center; }
 .account-email-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .account-menu {
   position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
@@ -113,13 +116,29 @@ a { color: inherit; }
 }
 .account-menu-item:hover { background: var(--surface-2); }
 
+/* Topbar shortcut straight to "Marked as same", with a live pair count. */
+.learned-shortcut { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.learned-shortcut-icon { font-family: var(--mono); font-weight: 700; color: var(--marine); }
+.learned-shortcut[aria-current="page"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+.learned-shortcut[aria-current="page"] .learned-shortcut-icon { color: #fff; }
+.learned-shortcut-count {
+  font-size: 11.5px; font-weight: 700; min-width: 20px; padding: 1px 6px;
+  border-radius: 999px; background: var(--marine); color: #fff;
+  text-align: center; line-height: 18px;
+}
+.learned-shortcut-count[hidden] { display: none; }
+.learned-shortcut-label-short { display: none; }
+
 @media (max-width: 860px) {
   .account { padding-left: 10px; }
   .account-email-btn { max-width: 96px; }
+  .learned-shortcut-label-full { display: none; }
+  .learned-shortcut-label-short { display: inline; }
 }
 @media (max-width: 420px) {
   .account-btn { font-size: 12.5px; padding: 7px 10px; }
   .account-email-btn { max-width: 72px; }
+  .learned-shortcut { padding-left: 8px; padding-right: 8px; gap: 4px; }
 }
 
 main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
@@ -881,4 +900,93 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .tab-left {
   display: block; font-family: var(--mono); font-size: 11px; color: var(--ink-3);
   font-variant-numeric: tabular-nums; margin-top: 2px;
+}
+
+/* ── Learned equivalences ──────────────────────────────────────── */
+/* "Mark as same" button on a mismatch row: same look and 44px tap area
+   as .proof-btn, so a seven-row table doesn't grow a second visual style. */
+.mark-same-btn {
+  margin-top: 5px; margin-left: 12px; font-family: var(--mono); font-size: 10.5px;
+  color: var(--ink-3); background: none; border: 0; padding: 0;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.mark-same-btn:hover { color: var(--ink); }
+.mark-same-btn { padding-top: 15px; padding-bottom: 15px; margin-top: -10px; margin-bottom: -15px; }
+
+.mark-same-confirm {
+  padding: 12px 14px; background: var(--surface-2); border-top: 1px dashed var(--rule);
+}
+.mark-same-prompt { font-size: 13px; color: var(--ink); margin-bottom: 10px; }
+.mark-same-prompt b { font-family: var(--mono); }
+.mark-same-scope { font-size: 12px; color: var(--ink-3); margin-bottom: 10px; max-width: 60ch; }
+.mark-same-reason-label { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 4px; }
+.mark-same-reason { width: 100%; box-sizing: border-box; resize: vertical; margin-bottom: 4px; }
+.mark-same-reason-counter { font-size: 11px; color: var(--ink-3); margin-bottom: 10px; }
+.mark-same-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.mark-same-actions .btn { min-height: 38px; padding: 7px 16px; }
+.mark-same-error { margin-bottom: 10px; }
+.mark-same-saved-note { margin-top: 0; }
+
+.learned-chip-wrap { display: inline-flex; align-items: center; gap: 8px; margin-top: 5px; }
+.learned-chip { display: inline-block; }
+.learned-undo-btn {
+  font-size: 11px; padding: 0; min-height: 0; color: var(--ink-3);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.learned-undo-btn:hover { color: var(--ink); }
+
+/* ── seamTable: the "Marked as same" group ───────────────────────
+   Own tone (marine), not mismatch/match/review — a marked row is neither
+   a live defect nor a genuine match, it is a clerk's judgement call. */
+.seam-group-label {
+  padding: 8px 14px; font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--marked); background: var(--marked-bg);
+  border-bottom: 1px solid var(--rule); border-top: 1px solid var(--rule);
+}
+.seam-row[data-state="covered"] { background: var(--marked-bg); }
+.seam-row[data-state="covered"] .seam::before { background: var(--marked); }
+.seam-row[data-state="covered"] .seam::after { content: "="; color: var(--marked); }
+.seam-row[data-state="covered"] .f-label { color: var(--marked); font-weight: 600; }
+.marked-same-panel { padding: 0 14px 12px; background: var(--marked-bg); border-bottom: 1px solid var(--rule); }
+.marked-same-label { font-size: 12.5px; color: var(--ink-2); }
+.marked-same-line a { color: var(--marked); }
+.marked-same-reason { margin-top: 3px; font-style: italic; color: var(--ink-2); }
+.marked-same-reason a { font-style: normal; }
+.marked-same-actions { margin-top: 6px; display: flex; gap: 14px; }
+
+.verdict-live-sub { margin-top: 6px; font-size: 12.5px; color: var(--ink-2); font-weight: 400; }
+.recheck-marked-chip, .chip-marked-same { margin-left: 8px; }
+.reply-redrafted-chip { background: var(--marked-bg); color: var(--marked); }
+
+/* ── #/learned — the management page ─────────────────────────────── */
+.learned-usage { font-size: 13px; color: var(--ink-3); margin: 4px 0 16px; }
+.learned-toolbar { margin-bottom: 10px; }
+.learned-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.learned-chip-btn { border: 1px solid var(--rule-2); cursor: pointer; font-family: inherit; }
+.learned-chip-btn[aria-pressed="true"] { background: var(--marked-bg); color: var(--marked); border-color: var(--marked); }
+.learned-list { display: flex; flex-direction: column; gap: 0; }
+.learned-row {
+  padding: 14px 4px; border-bottom: 1px solid var(--rule); font-size: 13px;
+}
+.learned-row:last-child { border-bottom: 0; }
+.learned-row-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.learned-field-chip { text-transform: capitalize; }
+.learned-wordings { font-family: var(--mono); font-size: 12.5px; color: var(--ink); overflow-wrap: anywhere; }
+.learned-pair-arrow { color: var(--ink-3); margin: 0 6px; }
+.learned-matches-as { margin-top: 4px; font-size: 11.5px; color: var(--ink-3); font-family: var(--mono); overflow-wrap: anywhere; }
+.learned-reason { margin-top: 6px; font-style: italic; color: var(--ink-2); }
+.learned-meta { margin-top: 6px; font-size: 11.5px; color: var(--ink-3); }
+.learned-meta a { color: var(--ink-2); }
+.learned-actions { margin-top: 8px; display: flex; gap: 16px; }
+.learned-removed-line { color: var(--ink-3); font-size: 13px; }
+/* display is set only via :not([hidden]) - an unconditional `display: flex`
+   here would beat the UA [hidden] rule (author styles always win, whatever
+   the specificity) and leave every row's edit form visibly open, the same
+   trap the mark-as-same panel's own actions/buttons were built to avoid. */
+.learned-edit-form[hidden] { display: none; }
+.learned-edit-form:not([hidden]) { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 12px; background: var(--surface-2); border-radius: var(--r); }
+.learned-edit-actions { display: flex; gap: 12px; align-items: center; }
+
+@media (max-width: 620px) {
+  .learned-row-head { flex-direction: column; align-items: flex-start; gap: 4px; }
 }
