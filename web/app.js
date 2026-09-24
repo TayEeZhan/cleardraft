@@ -1365,6 +1365,7 @@ function seamTable(d, ctx = {}) {
     const label = el("div", "f-label");
     label.append(el("span", null, c.label));
     row.append(label);
+    const actions = el("div", "f-label-actions");
 
     for (const side of ["si", "bl"]) {
       const cell = el("div", `f-val f-${side}`);
@@ -1404,7 +1405,7 @@ function seamTable(d, ctx = {}) {
           if (reasonBox) reasonBox.focus();
         }
       });
-      label.append(markBtn);
+      actions.append(markBtn);
       wrap.append(panel);
     }
 
@@ -1432,9 +1433,11 @@ function seamTable(d, ctx = {}) {
         btn.setAttribute("aria-expanded", String(!panel.hidden));
         btn.textContent = panel.hidden ? "where this came from" : "hide";
       });
-      label.append(btn);
+      actions.append(btn);
       wrap.append(panel);
     }
+
+    if (actions.childElementCount) label.append(actions);
   }
 
   for (const c of groups.mismatch) renderRow(c, null);
