@@ -289,6 +289,44 @@ confirm step, a "Matched via a pair you approved" chip with Undo on a row
 that came back `learned: true`, and a "Learned pairs" list with Undo on the
 account page.
 
+**Amendment (live re-count, reasons, management page).** A pair can now
+carry an optional reason (`note`, ≤280 chars) and be edited after the fact
+(`PATCH /api/equivalences/{id}`) — wording is re-normalised and re-checked
+against `can_learn`; a clash with another saved pair is a 409, the field
+itself stays immutable. The harder problem this phase solves: a **saved**
+board case is a frozen snapshot (`public/data.json` / the mail store), never
+re-run, so marking a pair after the fact could not visibly change it under
+the v1 design. `core/equivalence.py:evaluate_case` fixes this by staying
+pure and stateless — given a case's stored comparisons/recheck rows and the
+account's pair index, it re-derives "the one rule" (a differing row is
+*covered* when it is a learnable text field, both sides normalise to
+non-empty different strings, and that exact pair is on file) without
+touching `core/decide.py` or re-running the pipeline. `POST
+/api/equivalences/evaluate` is the transport for this: given up to 600
+cases shaped like saved details, it returns each case's effective
+status/defect_fields, which rows are covered (`rows: {field: pair_id}`) and
+which recheck rows are covered, and — with `draft:true` for exactly one
+case — a redrafted reply/follow-up reply, built by reconstructing
+`Email`/`Decision`/`RecheckRow` from the JSON and calling the existing,
+frozen `draft_reply`/`draft_recheck_reply` unchanged. Nothing here writes
+back to storage: it is a read-time projection, so removing or editing a
+pair automatically un-covers whatever it used to cover on the next call.
+
+The UI (`web/app.js`) caches one evaluation per case per source
+(`EVAL_CACHE`), invalidated whenever a pair is created, edited or removed
+(`loadPairs()`), so a case view, the inbox board's tabs/counts/tags, and
+the three CSV/JSON exports all read a consistent, live view without
+re-running any check. **The organiser submission (`buildSubmissionJson`) is
+the one deliberate exception — it stays on the checked result, unaffected
+by anything a clerk marks, because it exists to score the pipeline itself.**
+The Discrepancy report CSV drops covered rows entirely; the Full-results and
+per-case CSVs instead gain `marked_as_same`/`marked_reason` columns, so the
+export always shows why a row that looks like a mismatch didn't count as
+one. A new `#/learned` page (linked from the account menu, the account
+summary, and every marked-row label) is the one place to search, filter,
+edit and remove pairs, with `#/learned/<id>` deep-linking straight to a
+pair's inline edit form.
+
 **Alternatives considered.**
 - *A rule derived from the pair* (e.g. "treat any X as Y from now on"). Rejected:
   a rule generalises past what a human actually verified and risks hiding a

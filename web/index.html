@@ -34,6 +34,7 @@
         <span id="account-email-text"></span>
       </button>
       <div class="account-menu" id="account-menu" hidden role="menu">
+        <a class="account-menu-item" href="#/learned" id="account-learned-link" role="menuitem">Marked as same</a>
         <button type="button" class="account-menu-item" id="account-signout-btn" role="menuitem">Sign out</button>
       </div>
     </div>
@@ -274,10 +275,38 @@
         <p class="account-reassure">Signed in as <span id="account-signed-in-email"></span>.</p>
       </div>
       <section class="panel" id="learned-pairs-panel">
-        <h3>Learned pairs</h3>
-        <p class="sub">Exact SI/BL pairs you've marked as the same. Each one clears only that field, only for you, until you undo it.</p>
-        <div id="learned-pairs-list"></div>
+        <h3>Marked as same</h3>
+        <p class="sub" id="learned-summary-line">Loading…</p>
+        <a class="btn btn-quiet" href="#/learned">Manage your marked pairs</a>
       </section>
+    </div>
+  </section>
+
+  <section id="view-learned" class="view" hidden>
+    <div class="view-head">
+      <h1 id="learned-heading" tabindex="-1">Marked as same</h1>
+      <p class="lede">Exact wordings you've told ClearDraft are the same, per field, per account. Removing one brings any discrepancy it was covering back.</p>
+    </div>
+
+    <div id="learned-signed-out" class="empty" hidden>
+      <p>Sign in to see and manage your marked pairs.</p>
+      <a class="link-btn" href="#/account">Sign in or create an account</a>
+    </div>
+    <div id="learned-unavailable" class="empty" hidden>Accounts aren't available on this deployment.</div>
+
+    <div id="learned-signed-in" hidden>
+      <p class="learned-usage" id="learned-usage-line"></p>
+
+      <div class="learned-toolbar">
+        <div class="search-field">
+          <label for="learned-search" class="visually-hidden">Search your marked pairs</label>
+          <input type="search" id="learned-search" class="search-input" placeholder="Search wordings or reasons" autocomplete="off">
+        </div>
+      </div>
+      <div class="learned-chips" id="learned-field-chips" role="group" aria-label="Filter by field"></div>
+
+      <div id="learned-list" class="learned-list" aria-live="polite"></div>
+      <div id="learned-empty" class="empty" hidden>No pairs marked yet — mark a mismatch as "the same" on a discrepancy to teach one. <a href="#/board">Go to the inbox</a></div>
     </div>
   </section>
 

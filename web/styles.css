@@ -21,6 +21,8 @@
   --mismatch-bg:#FBEAE8;
   --review:     #6C4BB6;
   --review-bg:  #EFEAF8;
+  --marked:     #14395E;
+  --marked-bg:  #E9EEF5;
 
   --display: 'Archivo', system-ui, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
@@ -852,6 +854,10 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 }
 .mark-same-prompt { font-size: 13px; color: var(--ink); margin-bottom: 10px; }
 .mark-same-prompt b { font-family: var(--mono); }
+.mark-same-scope { font-size: 12px; color: var(--ink-3); margin-bottom: 10px; max-width: 60ch; }
+.mark-same-reason-label { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 4px; }
+.mark-same-reason { width: 100%; box-sizing: border-box; resize: vertical; margin-bottom: 4px; }
+.mark-same-reason-counter { font-size: 11px; color: var(--ink-3); margin-bottom: 10px; }
 .mark-same-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .mark-same-actions .btn { min-height: 38px; padding: 7px 16px; }
 .mark-same-error { margin-bottom: 10px; }
@@ -865,18 +871,53 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 }
 .learned-undo-btn:hover { color: var(--ink); }
 
-/* ── #/account, signed in: "Learned pairs" list ─────────────────── */
-.learned-pair-row {
-  display: grid; grid-template-columns: 130px 1fr 100px auto;
-  align-items: center; gap: 12px; padding: 10px 0;
-  border-bottom: 1px solid var(--rule); font-size: 13px;
+/* ── seamTable: the "Marked as same" group ───────────────────────
+   Own tone (marine), not mismatch/match/review — a marked row is neither
+   a live defect nor a genuine match, it is a clerk's judgement call. */
+.seam-group-label {
+  padding: 8px 14px; font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--marked); background: var(--marked-bg);
+  border-bottom: 1px solid var(--rule); border-top: 1px solid var(--rule);
 }
-.learned-pair-row:last-child { border-bottom: 0; }
-.learned-pair-field { color: var(--ink-2); text-transform: capitalize; }
-.learned-pair-values { font-family: var(--mono); font-size: 12.5px; color: var(--ink); overflow-wrap: anywhere; }
+.seam-row[data-state="covered"] { background: var(--marked-bg); }
+.seam-row[data-state="covered"] .seam::before { background: var(--marked); }
+.seam-row[data-state="covered"] .seam::after { content: "="; color: var(--marked); }
+.seam-row[data-state="covered"] .f-label { color: var(--marked); font-weight: 600; }
+.marked-same-panel { padding: 0 14px 12px; background: var(--marked-bg); border-bottom: 1px solid var(--rule); }
+.marked-same-label { font-size: 12.5px; color: var(--ink-2); }
+.marked-same-line a { color: var(--marked); }
+.marked-same-reason { margin-top: 3px; font-style: italic; color: var(--ink-2); }
+.marked-same-reason a { font-style: normal; }
+.marked-same-actions { margin-top: 6px; display: flex; gap: 14px; }
+
+.verdict-live-sub { margin-top: 6px; font-size: 12.5px; color: var(--ink-2); font-weight: 400; }
+.recheck-marked-chip, .chip-marked-same { margin-left: 8px; }
+.reply-redrafted-chip { background: var(--marked-bg); color: var(--marked); }
+
+/* ── #/learned — the management page ─────────────────────────────── */
+.learned-usage { font-size: 13px; color: var(--ink-3); margin: 4px 0 16px; }
+.learned-toolbar { margin-bottom: 10px; }
+.learned-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.learned-chip-btn { border: 1px solid var(--rule-2); cursor: pointer; font-family: inherit; }
+.learned-chip-btn[aria-pressed="true"] { background: var(--marked-bg); color: var(--marked); border-color: var(--marked); }
+.learned-list { display: flex; flex-direction: column; gap: 0; }
+.learned-row {
+  padding: 14px 4px; border-bottom: 1px solid var(--rule); font-size: 13px;
+}
+.learned-row:last-child { border-bottom: 0; }
+.learned-row-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.learned-field-chip { text-transform: capitalize; }
+.learned-wordings { font-family: var(--mono); font-size: 12.5px; color: var(--ink); overflow-wrap: anywhere; }
 .learned-pair-arrow { color: var(--ink-3); margin: 0 6px; }
-.learned-pair-added { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.learned-matches-as { margin-top: 4px; font-size: 11.5px; color: var(--ink-3); font-family: var(--mono); overflow-wrap: anywhere; }
+.learned-reason { margin-top: 6px; font-style: italic; color: var(--ink-2); }
+.learned-meta { margin-top: 6px; font-size: 11.5px; color: var(--ink-3); }
+.learned-meta a { color: var(--ink-2); }
+.learned-actions { margin-top: 8px; display: flex; gap: 16px; }
+.learned-removed-line { color: var(--ink-3); font-size: 13px; }
+.learned-edit-form { margin-top: 10px; padding: 12px; background: var(--surface-2); border-radius: var(--r); display: flex; flex-direction: column; gap: 8px; }
+.learned-edit-actions { display: flex; gap: 12px; align-items: center; }
 
 @media (max-width: 620px) {
-  .learned-pair-row { grid-template-columns: 1fr; gap: 4px; }
+  .learned-row-head { flex-direction: column; align-items: flex-start; gap: 4px; }
 }
