@@ -858,15 +858,25 @@ function didLine(d) {
   return `ClearDraft did: ${joinPlain(parts)}.`;
 }
 
-function yourPartLine(d) {
-  const kind = verdictKind(d);
+/* Effective, not checked: once a marked pair clears a field, "Your part"
+   must stop asking the clerk to chase a difference that no longer counts as
+   one. evaluation is optional — every existing (non-live, non-signed-in)
+   caller keeps working off the checked d exactly as before. */
+function yourPartLine(d, evaluation) {
+  const effDefectFields = evaluation ? evaluation.defect_fields : d.defect_fields;
+  const effStatus = evaluation ? evaluation.status : d.status;
+  const kind = evaluation ? (effStatus === "MISMATCH" ? "mismatch" : effStatus === "NEEDS_REVIEW" ? "review" : "match") : verdictKind(d);
+
   if (kind === "mismatch") {
-    const n = d.defect_fields.length;
+    const n = effDefectFields.length;
     return `Your part: Check the ${n} highlighted field${n === 1 ? "" : "s"} against ${n === 1 ? "its" : "their"} source lines, then send the reply asking for an amendment.`;
   }
   if (kind === "review") {
     const reason = REASON[d.review_reason] || "it was not sure";
     return `Your part: ClearDraft did not decide this one (${reason}). Open the documents and decide yourself.`;
+  }
+  if (evaluation && evaluation.changed && d.status === "MISMATCH" && effStatus !== "MISMATCH") {
+    return "Your part: Nothing left to amend — the differences are marked as same by you. Check the reply and send it.";
   }
   if (d.comparisons && d.comparisons.length) {
     return `Your part: All ${d.comparisons.length} fields match. Skim the table, then send the confirmation.`;
@@ -875,10 +885,10 @@ function yourPartLine(d) {
   return `Your part: Not a document check (${cat}). Handle it as usual.`;
 }
 
-function yourPartPanel(d) {
+function yourPartPanel(d, evaluation) {
   const panel = el("div", "your-part-panel");
   panel.append(el("div", "your-part-did", didLine(d)));
-  panel.append(el("div", "your-part-yours", yourPartLine(d)));
+  panel.append(el("div", "your-part-yours", yourPartLine(d, evaluation)));
   return panel;
 }
 
@@ -1013,7 +1023,7 @@ function renderReview(id) {
   host.append(caseActions);
   host.append(originalEmailDetails(d));
 
-  const yourPart = yourPartPanel(d);
+  const yourPart = yourPartPanel(d, evaluation);
   if (d.recheck) {
     renderVerdict(d, host, { reply: false, afterVerdict: yourPart, evaluation, rerender });
     host.append(recheckCard(d.recheck, evaluation));
@@ -1032,11 +1042,14 @@ function renderReview(id) {
 
   /* Live re-count: only when signed in with at least one saved pair, and
      only once per case (the cache above already returns a hit on repeat
-     renders). A change re-renders the whole case once more so the verdict,
-     table and reply all reflect it together. */
+     renders). Re-render whenever the evaluation covers anything at all, not
+     only when it *changed* the case's status/defect count — a case the
+     pipeline already cleared by applying the pair live (uploaded after the
+     pair was learned, or re-checked) still needs its covered rows grouped
+     and labelled, even though nothing about its status moved. */
   if (!evaluation && ACCOUNT.user && PAIRS.length) {
     evaluateCaseLive(id, source, d).then((ev) => {
-      if (ev && ev.changed) rerender();
+      if (ev && (ev.changed || (ev.rows && Object.keys(ev.rows).length))) rerender();
     });
   }
 }
@@ -1192,37 +1205,31 @@ async function deletePair(id) {
   }
 }
 
-/* A row whose JSON came back learned:true — matched only because a clerk
-   already approved this exact pair (live check path only; a saved case's
-   own mismatch rows are handled by the "Marked as same" group in
-   seamTable(), not this chip). The matching pair is looked up in the
-   already-loaded PAIRS state — no extra round trip, no fragile search. */
-function learnedChip(c) {
-  const wrap = el("span", "learned-chip-wrap");
-  const chip = el("span", "chip chip-quiet learned-chip", "Matched via a pair you approved");
-  wrap.append(chip);
-
-  const match = PAIRS.find((p) => p.field === c.field && (
-    (p.a === c.si_norm && p.b === c.bl_norm) || (p.a === c.bl_norm && p.b === c.si_norm)
-  ));
-  if (match) {
-    const undoBtn = el("button", "link-btn learned-undo-btn", "Undo");
-    undoBtn.type = "button";
-    undoBtn.addEventListener("click", async () => {
-      undoBtn.disabled = true;
-      const removed = await deletePair(match.id);
-      if (removed) {
-        chip.textContent = "Removed";
-        undoBtn.remove();
-        toast("Pair removed — recheck to see the mismatch again.");
-      } else {
-        undoBtn.disabled = false;
-        toast("Could not remove this pair. Try again.");
-      }
-    });
-    wrap.append(undoBtn);
+/* Which comparison fields are covered by a marked pair, and the pair id
+   behind each — merging two sources so the "Marked as same" group and its
+   full label (reason/date/source/Undo/Edit) render consistently everywhere
+   a covered field can show up:
+   1. evaluation.rows, from POST /api/equivalences/evaluate against a saved
+      case — present whether or not the evaluation actually *changed* the
+      case's status (a case already checked OK because the pipeline applied
+      the pair live still has that field's row covered).
+   2. comparison.learned + a local PAIRS lookup, for a row that arrived
+      already matched via a pair — the live "Check a pair" checker and
+      freshly processed mail both apply pairs at check time (server-side
+      known_equal) and never call /evaluate at all, so this is the only
+      signal available for them. Retires the old learnedChip's inline
+      "Matched via a pair you approved" rendering in favour of the one
+      shared label. */
+function buildCoveredRows(d, evaluation) {
+  const covered = { ...((evaluation && evaluation.rows) || {}) };
+  for (const c of d.comparisons || []) {
+    if (covered[c.field] || !c.learned) continue;
+    const match = PAIRS.find((p) => p.field === c.field && (
+      (p.a === c.si_norm && p.b === c.bl_norm) || (p.a === c.bl_norm && p.b === c.si_norm)
+    ));
+    if (match) covered[c.field] = match.id;
   }
-  return wrap;
+  return covered;
 }
 
 function formatPairDate(iso) {
@@ -1297,12 +1304,16 @@ function seamTable(d, ctx = {}) {
   wrap.append(head);
 
   const evaluation = ctx.evaluation || null;
-  const coveredRows = (evaluation && evaluation.rows) || {};
+  const coveredRows = buildCoveredRows(d, evaluation);
 
   const groups = { mismatch: [], covered: [], unknown: [], match: [] };
   for (const c of d.comparisons) {
     const st = stateOf(c);
-    if (st === "mismatch" && coveredRows[c.field]) groups.covered.push(c);
+    // Covered regardless of state: a genuine mismatch the evaluation
+    // resolved, or a row that arrived already matched via a pair applied at
+    // check time — both land in the "Marked as same" group, never among
+    // ordinary matches.
+    if (coveredRows[c.field]) groups.covered.push(c);
     else groups[st].push(c);
   }
 
@@ -1313,7 +1324,6 @@ function seamTable(d, ctx = {}) {
 
     const label = el("div", "f-label");
     label.append(el("span", null, c.label));
-    if (c.learned) label.append(learnedChip(c));
     row.append(label);
 
     for (const side of ["si", "bl"]) {
