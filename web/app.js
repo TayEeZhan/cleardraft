@@ -231,36 +231,77 @@ async function evaluateCaseLive(id, source, d) {
    board then silently falls back to checked results, per the plan. */
 let BOARD_BATCH_TRIED = { mine: false, sample: false };
 
-async function evaluateBoardBatch(source) {
-  if (!ACCOUNT.user || !PAIRS.length) return false;
-  if (BOARD_BATCH_TRIED[source]) return false;
-  const board = source === "mine" ? MINE.board : (DATA ? DATA.board : []);
-  const cache = EVAL_CACHE[source];
-  const candidates = [];
-  for (const row of board) {
-    if (cache.has(row.email_id)) continue;
-    const detail = source === "mine" ? MINE.detail[row.email_id] : DATA && DATA.detail[row.email_id];
-    if (!detail) continue;
-    const hasLearnedRow = (detail.comparisons || []).some((c) => c.learned);
-    if (row.status === "MISMATCH" || hasLearnedRow) candidates.push(detail);
+/* The server caps the WHOLE evaluate request at MAX_EVALUATE_BODY_CHARS
+   (api/_equivalences.py: 20,000 characters for json.dumps(cases), not per
+   case) - an inbox board can easily hold 40+ MISMATCH cases, and each one
+   carries its full email body, so one request for the whole board reliably
+   blows that cap and comes back 400 body_too_large. evaluateBoardBatch used
+   to send exactly one such request and treat a non-OK response as "nothing
+   to apply", which is why marking a pair never moved anything on the board:
+   the batch call failed every time, silently. Chunking keeps each request
+   comfortably under the cap; a generous safety margin below 20,000 absorbs
+   the outer {cases, draft} JSON wrapper and per-request variance. */
+const EVAL_BATCH_CHAR_BUDGET = 16000;
+
+function chunkCasesByBudget(cases) {
+  const chunks = [];
+  let chunk = [];
+  let chars = 2; // "[]"
+  for (const c of cases) {
+    const size = JSON.stringify(c).length + 1;
+    if (chunk.length && chars + size > EVAL_BATCH_CHAR_BUDGET) {
+      chunks.push(chunk);
+      chunk = [];
+      chars = 2;
+    }
+    chunk.push(c);
+    chars += size;
   }
-  BOARD_BATCH_TRIED[source] = true;
-  if (!candidates.length) return false;
-  const cases = candidates.slice(0, 600).map(buildCaseForEval);
+  if (chunk.length) chunks.push(chunk);
+  return chunks;
+}
+
+async function postEvaluateChunk(cases, draft) {
   try {
     const r = await fetch("/api/equivalences/evaluate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
-      body: JSON.stringify({ cases, draft: false }),
+      body: JSON.stringify({ cases, draft }),
     });
-    if (!r.ok) return false;
+    if (!r.ok) return [];
     const j = await r.json();
-    for (const ev of j.cases || []) if (ev && ev.email_id) cache.set(ev.email_id, ev);
-    return true;
+    return j.cases || [];
   } catch {
-    return false; /* board falls back to checked results */
+    return [];
   }
+}
+
+async function evaluateBoardBatch(source) {
+  if (!ACCOUNT.user || !PAIRS.length) return false;
+  if (BOARD_BATCH_TRIED[source]) return false;
+  const board = source === "mine" ? MINE.board : (DATA ? DATA.board : []);
+  const cache = EVAL_CACHE[source];
+  const candidateDetails = [];
+  for (const row of board) {
+    if (cache.has(row.email_id)) continue;
+    const detail = source === "mine" ? MINE.detail[row.email_id] : DATA && DATA.detail[row.email_id];
+    if (!detail) continue;
+    const hasLearnedRow = (detail.comparisons || []).some((c) => c.learned);
+    if (row.status === "MISMATCH" || hasLearnedRow) candidateDetails.push(detail);
+  }
+  BOARD_BATCH_TRIED[source] = true;
+  if (!candidateDetails.length) return false;
+
+  const cases = candidateDetails.slice(0, 600).map(buildCaseForEval);
+  const chunks = chunkCasesByBudget(cases);
+  const results = await Promise.all(chunks.map((chunk) => postEvaluateChunk(chunk, false)));
+
+  let changed = false;
+  for (const evs of results) {
+    for (const ev of evs) if (ev && ev.email_id) { cache.set(ev.email_id, ev); changed = true; }
+  }
+  return changed; /* any chunk that failed just leaves its cases uncached - board falls back to checked results for those */
 }
 
 /* The effective status/defect count for a board row: the cached evaluation
@@ -432,6 +473,26 @@ const LEARNABLE_FIELDS = new Set([
   "shipper", "consignee", "notify_party", "port_of_loading", "port_of_discharge",
 ]);
 
+/* The exact capitalised labels seamTable() rows use (from data.json's
+   comparison.label), for the five learnable fields only — used wherever a
+   pair's field name is shown as its own chip/label (never in prose, where
+   FIELD_WORDS's lowercase form reads naturally). */
+const LEARNABLE_FIELD_LABELS = {
+  shipper: "Shipper", consignee: "Consignee", notify_party: "Notify Party",
+  port_of_loading: "Port of Loading", port_of_discharge: "Port of Discharge",
+};
+function fieldLabel(field) { return LEARNABLE_FIELD_LABELS[field] || FIELD_WORDS[field] || field; }
+
+/* The case reference (e.g. "5ALT-01226") for a pair's source case id, for
+   display — falling back to the raw id only when the case can no longer be
+   found (mail cleared, a different account, ...). Always still links to
+   #/case/<id>, which works either way. */
+function referenceForSource(id) {
+  if (!id) return id;
+  const d = lookupDetail(id);
+  return (d && d.reference) || id;
+}
+
 function stateOf(c) {
   if (c.undecidable) return "unknown";
   return c.matched ? "match" : "mismatch";
@@ -461,7 +522,19 @@ function renderVerdict(d, host, { reply = true, afterVerdict = null, evaluation 
   v.append(el("div", "verdict-icon", icon));
   const vt = el("div", "verdict-text");
   vt.append(el("strong", null, title));
-  vt.append(document.createTextNode(humanise(d.rationale || "")));
+  /* The checked rationale ("2 of 7 fields differ: consignee, notify party")
+     goes stale the moment a covered field is marked as same - recompute it
+     from the effective defect fields instead of showing yesterday's count,
+     and drop it entirely once nothing differs any more. Only applies to a
+     BL_COMPARISON verdict; NEEDS_REVIEW/no-comparison rationale is untouched
+     since marking a pair can't fix an unreadable file. */
+  let rationaleText = humanise(d.rationale || "");
+  if (evaluation && evaluation.changed && d.comparisons.length && (d.status === "MISMATCH" || d.status === "OK")) {
+    rationaleText = effDefectFields.length
+      ? humanise(`${effDefectFields.length} of ${d.comparisons.length} fields differ: ${effDefectFields.join(", ")}`)
+      : "";
+  }
+  vt.append(document.createTextNode(rationaleText));
   if (evaluation && evaluation.changed) {
     const clearedCount = d.defect_fields.length - effDefectFields.length;
     vt.append(el("div", "verdict-live-sub",
@@ -1173,7 +1246,7 @@ function markedSameLabel(pairId, onUndo) {
   const date = formatPairDate(pair.added_at);
   line.append(document.createTextNode(`Marked as same by you${date ? ` · ${date}` : ""}${pair.source ? ` · from ` : ""}`));
   if (pair.source) {
-    const srcLink = el("a", null, pair.source);
+    const srcLink = el("a", null, referenceForSource(pair.source));
     srcLink.href = `#/case/${pair.source}`;
     line.append(srcLink);
   }
@@ -2800,7 +2873,7 @@ function learnedFieldChips(pairs) {
   wrap.append(allBtn);
 
   for (const field of Object.keys(counts).sort()) {
-    const btn = el("button", "chip chip-quiet learned-chip-btn", `${FIELD_WORDS[field] || field} (${counts[field]})`);
+    const btn = el("button", "chip chip-quiet learned-chip-btn", `${fieldLabel(field)} (${counts[field]})`);
     btn.type = "button";
     btn.setAttribute("aria-pressed", String(LEARNED_FIELD_FILTER === field));
     btn.addEventListener("click", () => { LEARNED_FIELD_FILTER = field; renderLearnedList(); });
@@ -2854,7 +2927,7 @@ function learnedPairRow(pair, openEdit) {
   }
 
   const head = el("div", "learned-row-head");
-  head.append(el("span", "chip chip-quiet learned-field-chip", FIELD_WORDS[pair.field] || pair.field));
+  head.append(el("span", "chip chip-quiet learned-field-chip", fieldLabel(pair.field)));
   const wordings = el("span", "learned-wordings");
   wordings.append(el("span", null, pair.si_raw || pair.a));
   wordings.append(el("span", "learned-pair-arrow", "↔"));
@@ -2873,7 +2946,7 @@ function learnedPairRow(pair, openEdit) {
   const date = formatPairDate(pair.added_at);
   meta.append(document.createTextNode(`Marked${date ? ` ${date}` : ""}${pair.source ? " from case " : ""}`));
   if (pair.source) {
-    const link = el("a", null, pair.source);
+    const link = el("a", null, referenceForSource(pair.source));
     link.href = `#/case/${pair.source}`;
     meta.append(link);
   }

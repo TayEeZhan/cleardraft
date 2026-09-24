@@ -915,7 +915,12 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .learned-meta a { color: var(--ink-2); }
 .learned-actions { margin-top: 8px; display: flex; gap: 16px; }
 .learned-removed-line { color: var(--ink-3); font-size: 13px; }
-.learned-edit-form { margin-top: 10px; padding: 12px; background: var(--surface-2); border-radius: var(--r); display: flex; flex-direction: column; gap: 8px; }
+/* display is set only via :not([hidden]) - an unconditional `display: flex`
+   here would beat the UA [hidden] rule (author styles always win, whatever
+   the specificity) and leave every row's edit form visibly open, the same
+   trap the mark-as-same panel's own actions/buttons were built to avoid. */
+.learned-edit-form[hidden] { display: none; }
+.learned-edit-form:not([hidden]) { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 12px; background: var(--surface-2); border-radius: var(--r); }
 .learned-edit-actions { display: flex; gap: 12px; align-items: center; }
 
 @media (max-width: 620px) {
