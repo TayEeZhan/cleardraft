@@ -283,6 +283,26 @@ order) no longer errors: it returns `200 {"pair": <existing record>,
 request sent a non-empty one, that note is saved onto the existing pair
 (and `updated_at` is set) rather than discarded.
 
+| `error` | Status | When |
+|---|---|---|
+| `disallowed_field` | 400 | `field` is not one of the five learnable text fields |
+| `value_too_long` | 400 | raw wording over 2000 chars, or normalised wording over 200 |
+| `note_too_long` | 400 | `note` over 280 characters |
+| `invalid_pair` | 400 | either side is blank after normalising, or both sides normalise the same |
+| `too_many_pairs` | 400 | this account already has `MAX_PAIRS_PER_ACCOUNT` (500) pairs (checked only for a genuinely new pair, not an already-known one) |
+| `not_signed_in` | 401 | signed out |
+| `accounts_unavailable` | 503 | storage not configured |
+
+### `DELETE /api/equivalences/{pair_id}`
+
+Undoes one pair. `200 {"ok": true}` on success.
+
+| `error` | Status | When |
+|---|---|---|
+| `not_found` | 404 | no such id on this account (including another account's id) |
+| `not_signed_in` | 401 | signed out |
+| `accounts_unavailable` | 503 | storage not configured |
+
 ### `PATCH /api/equivalences/{pair_id}`
 
 ```json

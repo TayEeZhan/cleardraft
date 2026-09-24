@@ -42,8 +42,11 @@ by design, since Gmail read access needs Google's restricted-scope review —
 or loads the full 520-email sample inbox in one click. Each case shows the
 seven-field table with the source line behind every value, who decided it
 and with what confidence, and a "Your part" line naming what to check or do.
-Results export as a discrepancy CSV, a full-results CSV, or the organiser's
-submission JSON.
+A signed-in clerk can also mark one exact SI/BL wording as "the same" on any
+of the five text fields; that specific pair, and only that pair, clears
+itself on every future check for that account — never a general rule, and
+never affecting the organiser's own scored submission. Results export as a
+discrepancy CSV, a full-results CSV, or the organiser's submission JSON.
 
 ## How AI is used, and kept in bounds
 
