@@ -48,3 +48,9 @@ docs/VIDEO_SCRIPT.md
 # Teammate briefs kept local, not published
 docs/BRIEF_SHENG_KUAN.md
 docs/BRIEF_ZI_QI.md
+
+# Finals strategy, kept local
+docs/FINALS_PREP.md
+
+# Agent worktrees
+.claude/worktrees/
