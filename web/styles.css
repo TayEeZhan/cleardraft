@@ -910,16 +910,25 @@ body:has(.done-bar) .toast {
 }
 @media (max-width: 520px) {
   body:has(.done-bar) .toast {
-    bottom: calc(210px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(120px + env(safe-area-inset-bottom, 0px));
   }
 }
 
 .chip-done { background: var(--surface-2); color: var(--ink-3); }
 .case.case-done { opacity: .6; }
 
+/* Phones: the bar is sticky, so every pixel of it hides the field table.
+   Primary button on its own full-width row, the other actions as small
+   links on one row under it, and no "Case k of N" line. */
 @media (max-width: 520px) {
-  .done-bar { flex-direction: column; align-items: stretch; }
-  .done-bar-actions { justify-content: space-between; }
+  .done-bar {
+    flex-direction: column; align-items: stretch; gap: 4px;
+    margin-top: 16px; padding: 8px 12px calc(6px + env(safe-area-inset-bottom, 0px));
+  }
+  .done-bar-actions { justify-content: space-between; gap: 4px 12px; }
+  .done-bar-actions .btn-primary { flex: 1 1 100%; justify-content: center; }
+  .done-bar-actions .link-btn { min-height: 44px; min-width: 44px; padding: 0 8px; justify-content: center; font-size: 13px; }
+  .done-bar-pos { display: none; }
 }
 
 /* ── Review status + "Something's wrong" flag form ─────────────── */
