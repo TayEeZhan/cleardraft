@@ -39,7 +39,8 @@ from fastapi import FastAPI, File, Form, Request, UploadFile  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
 from adapters.eml import EmlError, parse_eml, safe_filename  # noqa: E402
-from adapters.model import STATS, available as model_available  # noqa: E402
+from adapters.model import MODEL, STATS  # noqa: E402
+from adapters.model import available as model_available, switch_enabled as model_switch_enabled  # noqa: E402
 from adapters.store import StoreError, get_store  # noqa: E402
 from api._accounts import current_user, router as accounts_router, save_result_to_mailbox  # noqa: E402
 from core import parsers  # noqa: E402
@@ -108,6 +109,12 @@ def health() -> dict:
         "accounts": get_store() is not None,
         "parsers": list(parsers.supported()),
         "missing_parsers": parsers.MISSING_PARSERS,
+        # Short commit SHA this deployment was built from, for telling two
+        # live deploys apart at a glance. "local" outside Vercel, where the
+        # env var Vercel injects at build time is not set.
+        "commit": (os.environ.get("VERCEL_GIT_COMMIT_SHA") or "local")[:7],
+        "model": MODEL,
+        "model_switch": "on" if model_switch_enabled() else "off",
     }
 
 

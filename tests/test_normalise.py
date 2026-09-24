@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from core.normalise import (
     normalise,
     normalise_container_count,
@@ -19,6 +21,60 @@ def test_container_count_discards_size_but_not_quantity() -> None:
     assert normalise_container_count("3 x 40'HC") != normalise_container_count(
         "4 x 40'HC"
     )
+
+
+def test_container_count_plain_values() -> None:
+    assert normalise_container_count("6") == 6
+    assert normalise_container_count("6 CONTAINERS") == 6
+    assert normalise_container_count("") is None
+    assert normalise_container_count(None) is None
+
+
+#: The full decision table for the fail-closed rule: a wrong MATCH is the
+#: expensive error here (core/compare.py turns a None on either side into
+#: "undecidable", never a match - see core/decide.py's precedence ladder),
+#: so anything genuinely ambiguous about the quantity returns None rather
+#: than a guess, and only a single unambiguous "N x <size>" group - or a
+#: plain value with no "x" at all - returns an int.
+_CONTAINER_COUNT_CASES = [
+    # Mixed equipment: more than one "N x <size>" group. NOT summed - see
+    # normalise_container_count's docstring for why summing would be wrong.
+    ("2 x 40HC + 1 x 20GP", None),
+    ("2 x 40HC + 3 x 20GP", None),
+    ("1 X 20GP, 2 X 40HC", None),
+    ("5 CONTAINERS: 4 X 40HC + 1 X 20GP", None),
+    # Plain values: no "x" pattern, old leading-integer rule applies.
+    ("6 x 40'HC", 6),
+    ("6", 6),
+    ("6 CONTAINERS", 6),
+    # Exactly one "N x <size>" group: unambiguous.
+    ("2x40HC", 2),
+    ("1X40HC", 1),
+    ("10 X 40HC", 10),
+    ("SAID TO CONTAIN 2 X 40HC", 2),
+    ("2 X 20' = 40 TEU", 2),
+    ("1 x 40HC WITH 2 X SEALS", 1),
+    # Trailing "*" is noise, not a second multiplier, so this has zero "N x
+    # <size>" terms and falls back to the leading integer.
+    ("2 X 40 *", 2),
+    # Not a digit at the front, and the "2" is never recognised as an "N x"
+    # quantity (it is inside parentheses) - unparseable either way.
+    ("TWO (2) X 40HC", None),
+    # Size BEFORE the multiplier: which number is the quantity is genuinely
+    # ambiguous, so this always fails closed, never guessed at.
+    ("40' x 2", None),
+    ("40HC X 3", None),
+    ("20GP x 3", None),
+    ("20' x 2 + 40' x 1", None),
+    # Blank/unparseable.
+    ("", None),
+    (None, None),
+]
+
+
+@pytest.mark.parametrize("value, expected", _CONTAINER_COUNT_CASES)
+def test_container_count_table(value: "str | None", expected: "int | None") -> None:
+    assert normalise_container_count(value) == expected
 
 
 def test_weight_accepts_formatted_and_raw_xlsx_values() -> None:

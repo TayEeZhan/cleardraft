@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 
 MODEL = "claude-haiku-4-5"
@@ -90,13 +91,23 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
+def switch_enabled() -> bool:
+    """True unless CLEARDRAFT_USE_MODEL=0. Says nothing about the API key.
+
+    Split out from `available()` so callers that only care about the switch
+    itself - e.g. /api/health reporting whether the model tier is turned on
+    at all - do not have to re-read the environment variable themselves.
+    """
+    return os.environ.get("CLEARDRAFT_USE_MODEL", "1").strip() != "0"
+
+
 def available() -> bool:
     """True when a key is configured and the model has not been switched off.
 
     CLEARDRAFT_USE_MODEL=0 turns the model tier off without touching the key -
     that is how we demonstrate, honestly, what the rules decide on their own.
     """
-    if os.environ.get("CLEARDRAFT_USE_MODEL", "1").strip() == "0":
+    if not switch_enabled():
         return False
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -134,7 +145,13 @@ def complete_json(prompt: str, *, schema_hint: str, max_tokens: int = 512) -> di
     except ImportError as exc:
         raise ModelUnavailable(f"anthropic SDK not installed: {exc}") from exc
 
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    # timeout=20.0: a hung connection must not stall the batch run indefinitely.
+    # max_retries=0: the SDK's own retry-with-backoff would double up with the
+    # 2-attempt loop below, and a long backoff chain turns one provider blip
+    # into a stalled batch across 520 emails.
+    client = anthropic.Anthropic(
+        api_key=os.environ["ANTHROPIC_API_KEY"], timeout=20.0, max_retries=0
+    )
     system = (
         "You extract structured data from shipping operations email. "
         "Reply with one JSON object and nothing else. No prose, no markdown. "
@@ -162,14 +179,22 @@ def complete_json(prompt: str, *, schema_hint: str, max_tokens: int = 512) -> di
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
                 anthropic.BadRequestError, anthropic.NotFoundError) as exc:
             # Not transient: a bad key or a bad request fails identically on
-            # retry. The SDK already retries 429/5xx itself (max_retries=2), so
-            # our own second attempt exists only for unparseable replies.
+            # retry, so there is no point spending the second attempt on it.
+            # The SDK is constructed with max_retries=0 (see above) - this
+            # loop's own 2 attempts are the only retrying that happens, and
+            # they exist for a timeout, a transient 429/5xx, or an
+            # unparseable reply, not for an error that is certain to repeat.
             last = exc
             break
-        except Exception as exc:  # timeout after SDK retries, or unparseable reply
+        except Exception as exc:
+            # A timeout, a transient 429/5xx, or an unparseable reply. The
+            # SDK no longer retries any of these itself (max_retries=0, see
+            # above), so this loop's second attempt is the only retrying
+            # that happens for them.
             last = exc
             if attempt == 2:
                 break
+            time.sleep(1)  # a brief pause before the one retry, not a backoff chain
 
     STATS.failures += 1
     raise ModelUnavailable(f"model call failed after retry: {last}") from last
