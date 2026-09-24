@@ -48,6 +48,7 @@ from adapters.store import StoreError, get_store  # noqa: E402
 from api._accounts import current_user, router as accounts_router, save_result_to_mailbox  # noqa: E402
 from api._dataset import router as dataset_router  # noqa: E402
 from api._equivalences import lookup_for, router as equivalences_router  # noqa: E402
+from api._feedback import router as feedback_router  # noqa: E402
 from core import parsers  # noqa: E402
 from core.classify import classify  # noqa: E402
 from core.compare import compare  # noqa: E402
@@ -56,10 +57,12 @@ from core.extract import extract  # noqa: E402
 from core.pipeline import split_si_bl  # noqa: E402
 from core.reply import FIELD_LABELS, _reference, draft_reply  # noqa: E402
 from core.types import Classification, Email  # noqa: E402
+from core.variance import comparison_variance  # noqa: E402
 
 app = FastAPI()
 app.include_router(accounts_router)
 app.include_router(equivalences_router)
+app.include_router(feedback_router)
 app.include_router(dataset_router)
 
 
@@ -184,6 +187,7 @@ def _stats_snapshot() -> dict:
     return {
         "calls": STATS.calls,
         "gate_rejections": STATS.gate_rejections,
+        "placement_rejections": STATS.placement_rejections,
         "input_tokens": STATS.input_tokens,
         "output_tokens": STATS.output_tokens,
     }
@@ -276,6 +280,7 @@ async def check(
             "label": FIELD_LABELS.get(c.field, c.field),
             "matched": c.matched,
             "undecidable": c.undecidable,
+            "variance_reason": comparison_variance(c),
             "learned": c.matched and c.si_norm != c.bl_norm,
             "si_norm": c.si_norm,
             "bl_norm": c.bl_norm,
@@ -398,6 +403,7 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
                 "label": FIELD_LABELS.get(c.field, c.field),
                 "matched": c.matched,
                 "undecidable": c.undecidable,
+                "variance_reason": comparison_variance(c),
                 "learned": c.matched and c.si_norm != c.bl_norm,
                 "si_norm": c.si_norm,
                 "bl_norm": c.bl_norm,

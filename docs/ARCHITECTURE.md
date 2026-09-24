@@ -397,6 +397,36 @@ pair's inline edit form.
   200 characters, every pair attributed (who, when, source) and undoable in
   one click, both from the row it cleared and from the account page.
 
+### ADR-014 — Model evidence must be in the correct field, not merely present.
+
+**Decision.** The existing verbatim gate remains the first question: did the
+model invent this value? `core/placement.py` then asks a separate question:
+is the value under this field's label? Every physical source line containing
+the value is scored. A matching known label scores 2, an unfamiliar/unlabelled
+line scores 1, and a contradictory known label scores 0. The highest score
+wins; a best score of 0 is rejected and counted separately as a placement
+rejection. Cross-line values are never accepted.
+
+**Why.** A consignee value copied from the notify-party section is verbatim
+but still wrong. Presence-only verification cannot detect that error. Keeping
+the two gates and counters separate preserves an honest audit trail.
+
+### ADR-015 — Human corrections are a report overlay, not a pipeline rewrite.
+
+**Decision.** `core/feedback.py` defines the pure correction rule. Signed-in
+reviews are persisted per account by `api/_feedback.py` using the existing
+store port. A clerk's “Something's wrong” note forces the effective report
+status to `NEEDS_REVIEW / human_feedback`; board counts, case display and CSV
+exports use that effective status. The checked evidence and organiser-format
+submission remain immutable. `core/variance.py` similarly explains a small
+set of deterministic text-variation patterns, but never auto-clears them; its
+reason chip only pre-fills the existing Mark-as-same review action.
+
+**Why.** Corrections that live only in one browser do not update the work
+queue or exported report. Conversely, overwriting the original machine result
+would destroy the audit trail and contaminate scoring. A read-time overlay
+gives operations the correction while retaining both facts.
+
 ---
 
 ## 6. Failure modes
@@ -413,6 +443,7 @@ failure path converges on escalation to a person.
 | Field present but blank (`???`, `TBA`) | `aliases.is_blank` | `NEEDS_REVIEW / missing_value` |
 | Label we have never seen | alias lookup returns None | field missing, escalate |
 | Model answer rejected by the gate — value not found verbatim in the source document | `core/extract.py:verify_against_source`, counted in `adapters/model.py STATS.gate_rejections` | value discarded, field missing, escalate |
+| Model answer appears under a contradictory field label | `core/placement.py`, counted in `STATS.placement_rejections` | value discarded, field missing, escalate |
 | Model API down or no key | `ModelUnavailable` | rule tier only, escalate on gaps |
 | New document format | no adapter registered | `kind="OTHER"`, escalate |
 | Email nobody can classify — no rule matched, and the model was unavailable or its own answer failed verification | `core/decide.py`: `intent == "unknown" and confidence == 0.0` | `NEEDS_REVIEW / unclassified` — ours, not the organiser's four reasons; never fires on the sample inbox, exists for unseen mail |
@@ -616,6 +647,9 @@ core/            pure domain logic, no I/O
   parsers/       one adapter per format       Sheng Kuan
   extract.py     stage 2                      Sheng Kuan
   normalise.py   stage 3a                     Ee Zhan
+  placement.py   model field-placement gate
+  variance.py    display-only variance reasons
+  feedback.py    pure human-correction overlay
   compare.py     stage 3b                     Ee Zhan
   decide.py      stage 4                      Ee Zhan
   reply.py       draft generation             Ee Zhan
@@ -628,6 +662,7 @@ adapters/        everything touching the outside world
   model.py       the one door every model call passes through
 api/             FastAPI transport, Vercel Python serverless function
   _equivalences.py  learned-pairs routes + evaluate (ADR-011)
+  _feedback.py      per-account review persistence (ADR-015)
 web/             static HTML + CSS + one ES module, no build step
 eval/            the scoring harness
 tests/           contract and unit tests
@@ -673,9 +708,10 @@ the same way the mailbox is, and surfaces on the Accuracy page as "Your
 checks of ClearDraft's answers" (agreement %). Why: the expert asked for
 demos to show which steps a human validates and which they act on, and a
 review that is not recorded cannot be reported back. Trade-off: this is a
-record of agreement with ClearDraft's verdict, not a second ground truth —
-it never feeds back into the comparison logic itself, so a wrong human
-verdict cannot silently retrain the rules.
+per-account report overlay, not a second ground truth: a problem note moves
+the effective case to `NEEDS_REVIEW` and reaches CSV exports, but never feeds
+back into comparison or overwrites the organiser submission. A wrong human
+verdict therefore cannot silently retrain the rules.
 
 **Confidence surfaced.** Every case already carried `decided_by` (rule or
 model); the review screen now shows it alongside a confidence label next to

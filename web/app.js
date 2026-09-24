@@ -143,11 +143,17 @@ const REPLY_OPENED = new Set();
 
 /* Human review of a case: whether a clerk confirmed ClearDraft's answer,
    flagged it as wrong (with a note), or — from the old "Done" feature —
-   just marked it done. Persisted per-browser only, keyed by email_id;
-   every access is try/caught, same pattern as loadMine()/saveMine(). */
+   just marked it done. Signed-out reviews use the legacy browser key;
+   signed-in reviews have an account-scoped cache and are also mirrored to
+   the account API. This prevents two accounts on one browser seeing each
+   other's feedback while preserving offline/local-first behaviour. */
+function reviewStorageKey() {
+  return ACCOUNT.user ? `cleardraft.reviews.v2:${ACCOUNT.user.email}` : "cleardraft.reviews.v1";
+}
+
 function loadReviews() {
   try {
-    const raw = localStorage.getItem("cleardraft.reviews.v1");
+    const raw = localStorage.getItem(reviewStorageKey());
     if (!raw) return {};
     const obj = JSON.parse(raw);
     if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj;
@@ -163,7 +169,7 @@ let REVIEWS_SAVE_WARNED = false;
 
 function saveReviews() {
   try {
-    localStorage.setItem("cleardraft.reviews.v1", JSON.stringify(REVIEWS));
+    localStorage.setItem(reviewStorageKey(), JSON.stringify(REVIEWS));
   } catch {
     if (!REVIEWS_SAVE_WARNED) {
       REVIEWS_SAVE_WARNED = true;
@@ -245,13 +251,71 @@ function purgeUploadedReviews() {
 
 function getReview(source, id) { return REVIEWS[reviewKey(source, id)] || null; }
 function isReviewed(source, id) { return Boolean(REVIEWS[reviewKey(source, id)]); }
+function isProblemReview(review) {
+  if (!review) return false;
+  return review.verdict === "flagged"
+    || (review.verdict === "done" && /^problem:\s*\S/i.test(review.note || ""));
+}
+
+async function persistReview(key, review) {
+  if (!ACCOUNT.user) return;
+  try {
+    await fetch("/api/feedback", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ key, verdict: review.verdict, note: review.note || "" }),
+    });
+  } catch { /* local cache remains the fallback */ }
+}
+
+async function deletePersistedReview(key) {
+  if (!ACCOUNT.user) return;
+  try {
+    await fetch(`/api/feedback/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+  } catch { /* local deletion still takes effect */ }
+}
+
 function setReview(source, id, verdict, note) {
-  REVIEWS[reviewKey(source, id)] = { verdict, note: note || "", at: new Date().toISOString() };
+  const key = reviewKey(source, id);
+  const review = { verdict, note: note || "", at: new Date().toISOString() };
+  REVIEWS[key] = review;
   saveReviews();
+  void persistReview(key, review);
 }
 function clearReview(source, id) {
-  delete REVIEWS[reviewKey(source, id)];
+  const key = reviewKey(source, id);
+  delete REVIEWS[key];
   saveReviews();
+  void deletePersistedReview(key);
+}
+
+async function loadFeedback() {
+  if (!ACCOUNT.user) return;
+  try {
+    const r = await fetch("/api/feedback", { credentials: "same-origin" });
+    if (!r.ok) return;
+    const j = await r.json();
+    const remote = (j && j.reviews && typeof j.reviews === "object") ? j.reviews : {};
+    const local = REVIEWS;
+    const merged = { ...local };
+    for (const [key, review] of Object.entries(remote)) {
+      const localTime = Date.parse((local[key] && local[key].at) || "") || 0;
+      const remoteTime = Date.parse((review && review.at) || "") || 0;
+      if (!local[key] || remoteTime >= localTime) merged[key] = review;
+    }
+    REVIEWS = merged;
+    saveReviews();
+    // A review recorded offline is uploaded after connectivity returns.
+    for (const [key, review] of Object.entries(local)) {
+      if (!remote[key] || (Date.parse(review.at || "") || 0) > (Date.parse(remote[key].at || "") || 0)) {
+        void persistReview(key, review);
+      }
+    }
+  } catch { /* account-scoped browser cache remains usable offline */ }
 }
 
 const TAB_LABELS = {
@@ -506,8 +570,13 @@ async function evaluateBoardBatch(source) {
 function effectiveFor(source, row) {
   const cache = EVAL_CACHE[source];
   const ev = cache && cache.get(row.email_id);
-  if (!ev) return { status: row.status, defect_fields: row.defect_fields || [], changed: false };
-  return { status: ev.status || row.status, defect_fields: ev.defect_fields || row.defect_fields || [], changed: Boolean(ev.changed) };
+  const base = ev
+    ? { status: ev.status || row.status, review_reason: ev.review_reason || row.review_reason,
+        defect_fields: ev.defect_fields || row.defect_fields || [], changed: Boolean(ev.changed) }
+    : { status: row.status, review_reason: row.review_reason,
+        defect_fields: row.defect_fields || [], changed: false };
+  if (!isProblemReview(getReview(source, row.email_id))) return base;
+  return { ...base, status: "NEEDS_REVIEW", review_reason: "human_feedback", changed: true, human_feedback: true };
 }
 
 async function load() {
@@ -530,6 +599,7 @@ const REASON = {
   unreadable: "document could not be read",
   missing_value: "a field was blank",
   unclassified: "could not tell what it wants",
+  human_feedback: "flagged by a reviewer",
 };
 
 /* Case-insensitive substring search across reference, subject, sender and
@@ -574,7 +644,7 @@ function renderBoard() {
     if (eff.status === "MISMATCH") {
       for (const f of eff.defect_fields) tags.append(el("span", "chip chip-mismatch", f.replace(/_/g, " ")));
     } else if (eff.status === "NEEDS_REVIEW") {
-      tags.append(el("span", "chip chip-review", REASON[r.review_reason] || "needs a human"));
+      tags.append(el("span", "chip chip-review", REASON[eff.review_reason] || "needs a human"));
     } else if (r.category === "BL_COMPARISON") {
       tags.append(el("span", "chip chip-match", "7 of 7 match"));
     } else {
@@ -704,6 +774,14 @@ const LEARNABLE_FIELD_LABELS = {
 };
 function fieldLabel(field) { return LEARNABLE_FIELD_LABELS[field] || FIELD_WORDS[field] || field; }
 
+const VARIANCE_LABELS = {
+  punctuation_only: "Punctuation differs",
+  suffix_abbreviation: "Possible company-suffix abbreviation",
+  token_reorder: "Same words, different order",
+  country_suffix: "Possible country suffix",
+};
+function varianceLabel(reason) { return VARIANCE_LABELS[reason] || "Possible formatting variation"; }
+
 /* The case reference (e.g. "5ALT-01226") for a pair's source case id, for
    display — falling back to the raw id only when the case can no longer be
    found (mail cleared, a different account, ...). Always still links to
@@ -738,9 +816,9 @@ function verdictKind(d) {
 function effectiveKind(d) {
   const found = findRowById(d.email_id);
   const source = found ? found.source : SRC;
-  const evaluation = ACCOUNT.user ? EVAL_CACHE[source].get(d.email_id) : null;
-  if (!evaluation) return verdictKind(d);
-  return evaluation.status === "MISMATCH" ? "mismatch" : evaluation.status === "NEEDS_REVIEW" ? "review" : "match";
+  if (!found) return verdictKind(d);
+  const effective = effectiveFor(source, found.row);
+  return effective.status === "MISMATCH" ? "mismatch" : effective.status === "NEEDS_REVIEW" ? "review" : "match";
 }
 
 function renderVerdict(d, host, { reply = true, afterVerdict = null, evaluation = null, rerender = null } = {}) {
@@ -893,10 +971,13 @@ function fieldExplanation(c) {
   if (c.matched) return "All fields match";
   const siVal = (c.si && c.si.value) || "left blank";
   const blVal = (c.bl && c.bl.value) || "left blank";
-  return `SI says ${siVal}; draft BL says ${blVal}`;
+  const hint = c.variance_reason ? ` Possible formatting variation: ${varianceLabel(c.variance_reason).toLowerCase()}.` : "";
+  return `SI says ${siVal}; draft BL says ${blVal}.${hint}`;
 }
 
-function noComparisonExplanation(row) {
+function noComparisonExplanation(row, source) {
+  const review = getReview(source, row.email_id);
+  if (isProblemReview(review)) return `Flagged by reviewer: ${String(review.note || "").replace(/^problem:\s*/i, "")}`;
   if (row.status === "NEEDS_REVIEW") return REASON[row.review_reason] || "needs a human";
   return `Not a document check (${String(row.category || "").replace(/_/g, " ").toLowerCase()})`;
 }
@@ -909,14 +990,15 @@ function reviewColumnsFor(source, id) {
 
 function baseExportRow(row, detail, source) {
   const rv = reviewColumnsFor(source, row.email_id);
+  const effective = effectiveFor(source, row);
   return {
     email_id: row.email_id,
     reference: row.reference,
     subject: row.subject,
     from: row.from,
     category: row.category,
-    status: row.status,
-    review_reason: row.review_reason || "",
+    status: effective.status,
+    review_reason: effective.review_reason || "",
     decided_by: row.decided_by || (detail && detail.decided_by) || "",
     confidence: (detail && typeof detail.confidence === "number") ? Math.round(detail.confidence * 100) : "",
     human_review: rv.human_review,
@@ -947,7 +1029,7 @@ function noComparisonExportRow(row, detail, source) {
   return {
     ...baseExportRow(row, detail, source),
     field: "", field_result: "", si_value: "", bl_value: "", si_source: "", bl_source: "",
-    explanation: noComparisonExplanation(row),
+    explanation: noComparisonExplanation(row, source),
   };
 }
 
@@ -960,12 +1042,18 @@ function buildDiscrepancyRows(source) {
     const detail = detailFor(source, row.email_id);
     const comparisons = (detail && detail.comparisons) || [];
     const covered = coveredFieldsFor(source, row.email_id);
+    const problemFeedback = isProblemReview(getReview(source, row.email_id));
+    let emitted = false;
     if (comparisons.length) {
       for (const c of comparisons) {
         if (covered[c.field]) continue;
-        if (c.undecidable || !c.matched) rows.push(fieldExportRow(row, detail, c, source));
+        if (c.undecidable || !c.matched) {
+          rows.push(fieldExportRow(row, detail, c, source));
+          emitted = true;
+        }
       }
-    } else if (row.status === "NEEDS_REVIEW") {
+      if (problemFeedback && !emitted) rows.push(noComparisonExportRow(row, detail, source));
+    } else if (row.status === "NEEDS_REVIEW" || problemFeedback) {
       rows.push(noComparisonExportRow(row, detail, source));
     }
   }
@@ -1226,7 +1314,12 @@ function renderReview(id) {
 
   const found = findRowById(id);
   const source = found ? found.source : SRC;
-  const evaluation = ACCOUNT.user ? EVAL_CACHE[source].get(id) : null;
+  const machineEvaluation = ACCOUNT.user ? EVAL_CACHE[source].get(id) : null;
+  const effective = found ? effectiveFor(source, found.row) : null;
+  const evaluation = effective && (machineEvaluation || effective.changed)
+    ? { ...(machineEvaluation || {}), status: effective.status, review_reason: effective.review_reason,
+        defect_fields: effective.defect_fields, changed: effective.changed }
+    : machineEvaluation;
   const rerender = () => { if (location.hash === `#/case/${id}`) renderReview(id); };
 
   /* Built with el()/textContent, not innerHTML: an uploaded case's subject
@@ -1338,8 +1431,9 @@ function markSameConfirmPanel(c, d, markBtn, onSaved) {
   reasonBox.className = "field-input mark-same-reason";
   reasonBox.rows = 2;
   reasonBox.maxLength = MARK_SAME_REASON_MAX;
+  if (c.variance_reason) reasonBox.value = varianceLabel(c.variance_reason);
   panel.append(reasonBox);
-  const counter = el("div", "mark-same-reason-counter", `${MARK_SAME_REASON_MAX} characters left`);
+  const counter = el("div", "mark-same-reason-counter", `${MARK_SAME_REASON_MAX - reasonBox.value.length} characters left`);
   panel.append(counter);
   reasonBox.addEventListener("input", () => {
     counter.textContent = `${MARK_SAME_REASON_MAX - reasonBox.value.length} characters left`;
@@ -1564,6 +1658,9 @@ function seamTable(d, ctx = {}) {
 
     const label = el("div", "f-label");
     label.append(el("span", null, c.label));
+    if (st === "mismatch" && c.variance_reason) {
+      label.append(el("span", "variance-hint", varianceLabel(c.variance_reason)));
+    }
     row.append(label);
     const actions = el("div", "f-label-actions");
 
@@ -2312,7 +2409,9 @@ function renderReviewsPanel(host) {
   const agreementDenom = confirmed + flagged;
 
   const panel = el("div", "panel reviews-panel");
-  panel.append(el("h3", null, "Your checks of ClearDraft's answers (this browser)"));
+  panel.append(el("h3", null, ACCOUNT.user
+    ? "Your saved checks of ClearDraft's answers"
+    : "Your checks of ClearDraft's answers (this browser)"));
   panel.append(el("div", "sub", `You reviewed ${total} case${total === 1 ? "" : "s"}: ${confirmed} looked right, ${flagged} flagged as wrong`));
   panel.append(el("div", "sub", `Today: ${reviewedTodayCount().handled} handled`));
   if (agreementDenom > 0) {
@@ -2431,10 +2530,12 @@ function challengePanel(c) {
   p.append(t);
 
   const facts = el("div", "cmp-facts");
+  const placementRejections = c.placement_rejections || 0;
   facts.textContent =
     `The model decided ${c.decided_by_model} emails and got ${c.model_wrong} wrong. ` +
     `It was asked only what the rules could not answer: ${c.calls} calls, ${c.tokens.toLocaleString()} tokens in total. ` +
-    `Answers not found word for word in the document are discarded; ${c.gate_rejections} were discarded this run.`;
+    `Answers not found word for word in the document are discarded; ${c.gate_rejections} were discarded this run. ` +
+    `Values found on the page but assigned to the wrong field are rejected separately; ${placementRejections} were rejected this run.`;
   p.append(facts);
   return p;
 }
@@ -2508,7 +2609,8 @@ function renderCheckResult(data, evaluation = null) {
   const secs = typeof data.seconds === "number" ? data.seconds.toFixed(2) : "?";
   const calls = data.model ? data.model.calls : 0;
   const rejections = data.model ? data.model.gate_rejections : 0;
-  host.append(el("div", "check-meta", `read in ${secs}s · model calls ${calls} · ${rejections} answer${rejections === 1 ? "" : "s"} rejected by the gate`));
+  const placementRejections = data.model ? (data.model.placement_rejections || 0) : 0;
+  host.append(el("div", "check-meta", `read in ${secs}s · model calls ${calls} · ${rejections} absent-source rejection${rejections === 1 ? "" : "s"} · ${placementRejections} wrong-field rejection${placementRejections === 1 ? "" : "s"}`));
 
   if (data.email_reading) {
     const er = data.email_reading;
@@ -3467,9 +3569,10 @@ async function loadAccountMail() {
 }
 
 async function afterSignedIn() {
+  REVIEWS = loadReviews();
   await importLocalMailIfAny();
   await loadAccountMail();
-  await loadPairs();
+  await Promise.all([loadPairs(), loadFeedback()]);
   renderAccountChip();
   if (location.hash.startsWith("#/board")) renderBoardView();
 }
@@ -3478,6 +3581,7 @@ async function signOut() {
   try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch { /* proceed regardless */ }
   ACCOUNT.user = null;
   MINE = loadMine();
+  REVIEWS = loadReviews();
   PAIRS = [];
   invalidateEvalCache();
   renderLearnedShortcut();

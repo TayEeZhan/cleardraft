@@ -70,6 +70,7 @@ def test_value_present_in_the_document_is_accepted(monkeypatch, si_path) -> None
 
     assert doc.fields["consignee"].value == "EAST BRIGHT FZ-LLC"
     assert doc.fields["consignee"].decided_by == "model"
+    assert doc.fields["consignee"].label in doc.fields["consignee"].raw
     # The rule tier's own fields are untouched.
     assert doc.fields["shipper"].decided_by == "rule"
 
@@ -102,6 +103,29 @@ def test_partially_invented_value_is_discarded(monkeypatch, si_path) -> None:
     doc = extract(si_path)
 
     assert "consignee" not in doc.fields
+
+
+def test_value_present_only_under_the_wrong_field_is_discarded(monkeypatch, tmp_path) -> None:
+    """Presence is necessary but not sufficient: the value must be placeable."""
+    path = tmp_path / "email_997_SI.txt"
+    path.write_text(
+        """SHIPPING INSTRUCTION
+Shipper: APRIL FAR EAST (M) SDN BHD
+Notify: EAST BRIGHT FZ-LLC
+Port of Loading (POL): NANTONG, CHINA (CNNTG)
+POD: KARACHI, PAKISTAN (PKKHI)
+Total Containers: 6 x 40'HC
+Gross Wt (kgs): 131,058 KG
+""",
+        encoding="utf-8",
+    )
+    before = model_adapter.STATS.placement_rejections
+    _fake_model(monkeypatch, {"consignee": "APRIL FAR EAST (M) SDN BHD"})
+
+    doc = extract(str(path))
+
+    assert "consignee" not in doc.fields
+    assert model_adapter.STATS.placement_rejections == before + 1
 
 
 # --------------------------------------------------------------------------

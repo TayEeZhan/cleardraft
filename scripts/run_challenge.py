@@ -31,6 +31,7 @@ from core.classify import classify                  # noqa: E402
 from core.compare import compare                    # noqa: E402
 from core.extract import extract                    # noqa: E402
 from core.types import COMPARE_FIELDS, Email        # noqa: E402
+from core.variance import comparison_variance       # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CH = os.path.join(ROOT, "data", "challenge")
@@ -81,9 +82,15 @@ def run_docs() -> dict:
     gold = json.load(open(os.path.join(CH, "docs", "gold.json"), encoding="utf-8"))
     pairs = []
     for name, g in gold.items():
-        si_path = os.path.join(CH, "docs", f"{name}_SI.txt")
-        bl_path = os.path.join(CH, "docs", f"{name}_BL.txt")
-        entry = {"pair": name, "gold_defects": sorted(g.get("defect_fields") or [])}
+        files = g.get("files") or {}
+        si_path = os.path.join(CH, "docs", files.get("si", f"{name}_SI.txt"))
+        bl_path = os.path.join(CH, "docs", files.get("bl", f"{name}_BL.txt"))
+        entry = {
+            "pair": name,
+            "gold_defects": sorted(g.get("defect_fields") or []),
+            "gold_undecidable": sorted(g.get("undecidable_fields") or []),
+            "gold_variance": g.get("variance") or {},
+        }
         for mode, use in (("rules_only", False), ("with_model", True)):
             si = extract(si_path, use_model=use)
             bl = extract(bl_path, use_model=use)
@@ -104,6 +111,11 @@ def run_docs() -> dict:
                 "by_model": by_model,
                 "defects": sorted(r.field for r in rows if not r.matched and not r.undecidable),
                 "undecidable": sorted(r.field for r in rows if r.undecidable),
+                "variance": {
+                    r.field: reason
+                    for r in rows
+                    if (reason := comparison_variance(r)) is not None
+                },
             }
         pairs.append(entry)
     return {"pairs": pairs}
@@ -142,10 +154,13 @@ def main() -> int:
         print(f"  {p['pair']}: fields SI {r['fields_found']['si']}->{m['fields_found']['si']}"
               f"/{m['fields_present']['si']}  BL {r['fields_found']['bl']}->{m['fields_found']['bl']}"
               f"/{m['fields_present']['bl']}  | defects {m['defects']} (gold {p['gold_defects']})"
-              f"  undecidable {m['undecidable']}")
+              f"  undecidable {m['undecidable']} (gold {p['gold_undecidable']})"
+              f"  variance {m['variance']} (gold {p['gold_variance']})")
     s = report["model_stats"]
     print(f"MODEL  calls {s['calls']}  tokens {s['input_tokens']}+{s['output_tokens']}"
-          f"  gate rejections {s['gate_rejections']}  failures {s['failures']}  ({report['seconds']}s)")
+          f"  gate rejections {s['gate_rejections']}"
+          f"  placement rejections {s['placement_rejections']}"
+          f"  failures {s['failures']}  ({report['seconds']}s)")
     return 0
 
 
