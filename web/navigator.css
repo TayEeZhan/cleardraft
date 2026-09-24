@@ -1,0 +1,163 @@
+/* "Find anything" — header button + search dialog.
+   Uses the same design tokens as styles.css (colors, radius, shadow, type)
+   so the feature reads as part of the product, not bolted on. This file
+   owns two brand-new pieces of the page only: the .find-btn header control
+   and the #nav-backdrop/#nav-dialog it opens — nothing here touches an
+   existing selector. */
+
+/* ── header entry point ──────────────────────────────────────────────── */
+.find-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: inherit; font-size: 13px; font-weight: 500; color: var(--ink-2);
+  background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: var(--r);
+  padding: 8px 12px; min-height: 40px; min-width: 40px; cursor: pointer;
+  margin-left: 8px;
+  transition-property: border-color, background-color, color;
+  transition-duration: 120ms; transition-timing-function: ease-out;
+}
+.find-btn:hover { color: var(--ink); background: var(--surface); border-color: var(--ink-3); }
+.find-btn:active { transform: scale(0.97); }
+.find-btn-icon { flex: none; display: inline-flex; }
+.find-btn-label { white-space: nowrap; }
+.find-btn-kbd {
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+  border: 1px solid var(--rule-2); border-radius: 4px; padding: 1px 5px;
+  line-height: 1.4; white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .find-btn { padding: 8px; gap: 0; }
+  .find-btn-label, .find-btn-kbd { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .find-btn { transition: none; }
+  .find-btn:active { transform: none; }
+}
+
+/* ── dialog ───────────────────────────────────────────────────────────── */
+.nav-backdrop {
+  position: fixed; inset: 0; z-index: 80;
+  background: rgba(13, 21, 32, 0.38);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 12vh 16px 16px;
+}
+.nav-backdrop[hidden] { display: none; }
+
+.nav-dialog {
+  width: 100%; max-width: 560px;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(13, 21, 32, 0.22), 0 2px 8px rgba(13, 21, 32, 0.1);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  max-height: 76vh;
+}
+
+.nav-field {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px; border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+.nav-field-icon { color: var(--ink-3); display: inline-flex; flex: none; }
+.nav-input {
+  flex: 1 1 auto; min-width: 0; border: 0; background: none; outline: none;
+  font-family: inherit; font-size: 16px; color: var(--ink);
+}
+.nav-input::placeholder { color: var(--ink-3); }
+
+/* Always present, not just on phones: Esc has no equivalent on a touch
+   keyboard, and the full-width phone dialog (below) leaves no backdrop to
+   tap either — this is the only reliable close control there. */
+.nav-close-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; margin: -10px -8px -10px 0;
+  color: var(--ink-3); background: none; border: 0; border-radius: var(--r);
+  cursor: pointer;
+  transition-property: background-color, color;
+  transition-duration: 120ms; transition-timing-function: ease-out;
+}
+.nav-close-btn:hover { color: var(--ink); background: var(--surface-2); }
+@media (prefers-reduced-motion: reduce) { .nav-close-btn { transition: none; } }
+
+.nav-list {
+  list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1 1 auto;
+  min-height: 0;
+}
+.nav-row {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 12px; min-height: 44px; justify-content: center;
+  border-radius: 6px; cursor: pointer;
+  transition-property: background-color;
+  transition-duration: 100ms; transition-timing-function: ease-out;
+}
+.nav-row-active { background: var(--surface-2); }
+.nav-row-title { font-size: 14px; font-weight: 600; color: var(--ink); text-wrap: pretty; }
+.nav-row-hint { font-size: 12.5px; color: var(--ink-2); text-wrap: pretty; }
+
+.nav-row-ai { flex-direction: row; align-items: center; gap: 10px; }
+.nav-row-ai .nav-row-title { font-weight: 500; }
+.nav-row-ai-icon {
+  flex: none; font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.02em; color: var(--marine); background: var(--marked-bg);
+  border-radius: 999px; padding: 3px 7px; line-height: 1.3;
+}
+
+.nav-status {
+  padding: 0 16px; min-height: 0; font-size: 12.5px; color: var(--ink-2);
+  flex: none;
+}
+.nav-status:not(:empty) { padding: 10px 16px; border-top: 1px dashed var(--rule); }
+
+.nav-hint {
+  flex: none; padding: 10px 16px; border-top: 1px solid var(--rule);
+  background: var(--surface-2);
+  font-size: 11.5px; color: var(--ink-3);
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+}
+.nav-kbd {
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--rule-2); border-radius: 4px;
+  padding: 1px 5px; line-height: 1.4;
+}
+
+/* A touch device has no arrow keys, Enter key or Esc key to describe —
+   (hover: none) is the standard way to detect "primarily touch", distinct
+   from a narrow viewport (a touch laptop can still hover; a small desktop
+   window still has real keys). The Close button covers closing either way. */
+@media (hover: none) {
+  .nav-hint { display: none; }
+}
+
+@media (max-width: 640px) {
+  .nav-backdrop { padding: 0; align-items: flex-start; }
+  .nav-dialog {
+    max-width: none; width: 100%; height: 100%; max-height: 100%;
+    border-radius: 0; border: 0;
+  }
+  .nav-input { font-size: 16px; } /* keeps iOS Safari from zooming in on focus */
+  .nav-list { max-height: none; }
+}
+
+/* ── the "arrived" highlight ring ─────────────────────────────────────── */
+.nav-arrived {
+  outline: 2px solid var(--marine); outline-offset: 3px; border-radius: 6px;
+  animation: nav-ring-pulse 1.2s ease-out;
+}
+@keyframes nav-ring-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(20, 57, 94, 0.35); }
+  30%  { box-shadow: 0 0 0 6px rgba(20, 57, 94, 0.12); }
+  100% { box-shadow: 0 0 0 6px rgba(20, 57, 94, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-arrived { animation: none; }
+}
+
+/* ── View Transition fallback (browsers without document.startViewTransition
+   simply skip this; browsers with it get a quick built-in crossfade plus
+   this slight directional slide) ─────────────────────────────────────── */
+@media not (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root) { animation-duration: 180ms; }
+  ::view-transition-new(root) {
+    animation-duration: 250ms;
+    animation-timing-function: ease-out;
+  }
+}
