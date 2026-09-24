@@ -799,8 +799,6 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 
 .chip-done { background: var(--surface-2); color: var(--ink-3); }
 .case.case-done { opacity: .6; }
-.done-count-line { font-size: 12.5px; color: var(--ink-2); margin: 0 0 14px; }
-.done-count-line[hidden] { display: none; }
 
 @media (max-width: 520px) {
   .done-bar { flex-direction: column; align-items: stretch; }

@@ -230,14 +230,17 @@ function updateTabCounts() {
        reads against the whole tab. Shown only once the tab has at least
        one reviewed row (an untouched tab gains nothing from repeating its
        own count back as "N left"); a fully finished tab still shows
-       "0 left", which is exactly the satisfying part. */
+       "0 left", which is exactly the satisfying part. Placed after the
+       label (.tab-l), not between it and the count, so a screen reader
+       says "46, Discrepancy found, 12 left" rather than splitting the
+       number from its label. */
     const tabRows = rows.filter((r) => tabOf(r) === k);
     const reviewedInTab = tabRows.filter((r) => isReviewed(r.email_id)).length;
     let leftSpan = n.parentElement && n.parentElement.querySelector(".tab-left");
     if (reviewedInTab > 0) {
       if (!leftSpan) {
         leftSpan = el("span", "tab-left");
-        n.insertAdjacentElement("afterend", leftSpan);
+        n.parentElement.append(leftSpan);
       }
       leftSpan.textContent = `${tabRows.length - reviewedInTab} left`;
     } else if (leftSpan) {
@@ -1283,7 +1286,7 @@ function renderReviewsPanel(host) {
   const panel = el("div", "panel reviews-panel");
   panel.append(el("h3", null, "Your checks of ClearDraft's answers (this browser)"));
   panel.append(el("div", "sub", `You reviewed ${total} case${total === 1 ? "" : "s"}: ${confirmed} looked right, ${flagged} flagged as wrong`));
-  panel.append(el("div", "sub", `Today: ${reviewedTodayCount()} handled`));
+  panel.append(el("div", "sub", `Today: ${reviewedTodayCount().handled} handled`));
   if (agreementDenom > 0) {
     panel.append(el("div", "reviews-agreement", `Agreement: ${Math.round((confirmed / agreementDenom) * 100)}%`));
   }
@@ -1646,23 +1649,26 @@ function needsYouRows() {
   });
 }
 
-/* How many reviews (across every board, sample or mine — the store is
-   shared) were made today, by local date. Backs both the triage banner's
-   done state and the accuracy page's reviews panel, so "today" never
-   means two different things in the same UI. */
+/* How many rows of the active board were reviewed today, by local date —
+   and, of those, how many were an actual SI/BL pair comparison
+   (category "BL_COMPARISON"), since only a pair comparison is a document
+   check a person would otherwise have done by hand. Backs both the
+   triage banner's done state and the accuracy page's reviews panel. */
 function reviewedTodayCount() {
   const pad = (n) => String(n).padStart(2, "0");
   const now = new Date();
   const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  let count = 0;
-  for (const id of Object.keys(REVIEWS)) {
-    const at = REVIEWS[id] && REVIEWS[id].at;
-    if (!at) continue;
-    const d = new Date(at);
+  let handled = 0, pairs = 0;
+  for (const r of activeBoard()) {
+    const rv = REVIEWS[r.email_id];
+    if (!rv || !rv.at) continue;
+    const d = new Date(rv.at);
     if (Number.isNaN(d.getTime())) continue;
-    if (`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` === today) count++;
+    if (`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` !== today) continue;
+    handled++;
+    if (r.category === "BL_COMPARISON") pairs++;
   }
-  return count;
+  return { handled, pairs };
 }
 
 /* The first thing a clerk should see: where to start, and how close to
@@ -1690,6 +1696,7 @@ function renderTriageBanner() {
     const handled = totalY - count;
 
     const headline = el("div", "triage-headline");
+    headline.setAttribute("aria-live", "polite");
     headline.append(el("strong", null, `${count} need${count === 1 ? "s" : ""} you now`));
     headline.append(document.createTextNode(
       ` · ${mismatchLeft} discrepanc${mismatchLeft === 1 ? "y" : "ies"} · ${reviewLeft} need${reviewLeft === 1 ? "s" : ""} a human`
@@ -1707,18 +1714,25 @@ function renderTriageBanner() {
     bar.className = "triage-progress";
     bar.max = totalY;
     bar.value = handled;
+    bar.setAttribute("aria-labelledby", "triage-progress-label");
     progWrap.append(bar);
-    progWrap.append(el("span", "triage-progress-label", `${handled} of ${totalY} handled`));
+    const progLabel = el("span", "triage-progress-label", `${handled} of ${totalY} handled`);
+    progLabel.id = "triage-progress-label";
+    progWrap.append(progLabel);
     row.append(progWrap);
     banner.append(row);
   } else {
     // Every mismatch and needs-a-human case in this board is reviewed.
     // Colour is never the only signal — the state is in the words too.
     banner.classList.add("triage-clear");
-    banner.append(el("div", "triage-headline", "Nothing needs you right now."));
-    const t = reviewedTodayCount();
-    banner.append(el("div", "triage-done-note",
-      `You handled ${t} today — about ${t * 10} min of manual checking saved (estimate: up to 10 min per pair by hand).`));
+    const headline = el("div", "triage-headline", "Nothing needs you right now.");
+    headline.setAttribute("aria-live", "polite");
+    banner.append(headline);
+
+    const { handled: t, pairs } = reviewedTodayCount();
+    let doneText = `You handled ${t} today.`;
+    if (pairs > 0) doneText += ` That saved up to ${pairs * 10} min of manual checking (estimate: up to 10 min per SI/BL pair by hand).`;
+    banner.append(el("div", "triage-done-note", doneText));
   }
 }
 
