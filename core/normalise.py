@@ -48,16 +48,23 @@ _ENTITY_TAIL = re.compile(r"\s*[|\n\r]\s*")
 _TRAILING_LOCODE = re.compile(r"\s*\(\s*[A-Za-z]{2}[A-Za-z0-9]{3}\s*\)\s*$")
 _WHITESPACE = re.compile(r"\s+")
 _LEADING_INT = re.compile(r"\d+")
+#: A container SIZE/TYPE written BEFORE the multiplier, e.g. "40' x 2" or
+#: "40HC X 3" - the letter/apostrophe of the size token sits immediately
+#: (whitespace aside) before the "x". In every case we have seen, the
+#: quantity-first form ("2 x 40HC") is what a renderer actually means; the
+#: type-first form is rare enough, and ambiguous enough about which number is
+#: the quantity, that it is treated as unparseable rather than guessed at.
+#: Deliberately excludes "*" - see _COUNT_TERM below.
+_SIZE_BEFORE_MULTIPLIER = re.compile(r"[A-Za-z']\s*[xX×]\s*\d")
 #: The quantity in an "N x <type>" group, e.g. the "2" in "2 x 40HC", the "1"
 #: in "1 X 20GP". Matches only a digit run immediately (whitespace aside)
-#: followed by one of the four multiplication signs seen in the dataset, so
-#: it never fires on the container SIZE/TYPE itself ("40HC", "20GP", "45'HC"
-#: contain no "x") or on a bare weight. One "N x" per group is all a group
-#: ever has, so finding every occurrence anywhere in the text and summing
-#: their quantities is equivalent to summing group-by-group, without having
-#: to first split on the separators ("+", ",", "&", "and", a newline) that
-#: can appear between groups.
-_COUNT_TERM = re.compile(r"(\d+)\s*[xX×*]")
+#: followed by "x"/"X"/"×" and then something size-shaped (two digits, then
+#: a quote, "FT", or a letter - "20'", "40FT", "40HC"), so it never fires on
+#: a bare weight or a quantity that happens to precede unrelated numbers.
+#: "*" is deliberately NOT a multiplier here: unlike "x", it also turns up as
+#: plain noise ("2 X 40 *"), and treating it as one would misread that as a
+#: second group instead of trailing punctuation on the first.
+_COUNT_TERM = re.compile(r"(\d+)\s*[xX×]\s*(?=\d{2}\s*(?:'|FT|[A-Za-z]))")
 #: keep digits and both separators; strip units ("KG", "KGS", "MT") and spaces
 _WEIGHT_NOISE = re.compile(r"[^\d.,]")
 #: "21.577" is twenty-one thousand in European notation, not 21.577. Matches
@@ -156,33 +163,42 @@ def normalise_container_count(value: str) -> "int | None":
     Documents write "6 x 40'HC". Only the 6 is compared - container SIZE is
     not one of the seven fields, and including it would invent defects.
 
-    A shipment can span more than one container type: "2 x 40HC + 1 x 20GP".
-    The comparable quantity is the TOTAL container count, so every "N x
-    <type>" group is summed ("+", ",", "&", "and" and newlines all separate
-    groups in the documents we have seen) - "2 x 40HC + 1 x 20GP" is 3, and
-    "2 x 40HC + 3 x 20GP" is 5, so the two are correctly told apart instead
-    of both collapsing to the leading "2". Container size/type is still
-    discarded either way; only the quantities in front of each "x" are read.
+    A wrong MATCH is the expensive error here, not a wrong escalation: a
+    clerk reviewing an escalated case can still catch a real defect, but a
+    silent match never gets a second look. So this function is deliberately
+    conservative rather than clever about anything it cannot read with
+    confidence, and fails closed to None (undecidable, per core/compare.py -
+    a person checks) rather than guess:
 
-    When the text has no "N x" pattern at all - a bare "6", "6 CONTAINERS" -
-    this falls back to the old leading-integer rule.
+    - A SIZE-first form ("40' x 2", "40HC X 3") is unparseable. Which number
+      is the quantity is genuinely ambiguous when the size comes first, so
+      this is never guessed at - always None.
+    - A shipment split across more than one container type ("2 x 40HC + 1 x
+      20GP") is also None, on purpose - NOT summed. Summing would make "2 x
+      40HC + 1 x 20GP" (3 boxes, one split) equal "1 x 40HC + 2 x 20GP" (also
+      3 boxes, split the other way), silently matching two shipments that
+      are loaded completely differently. Mixed equipment escalates to a
+      person instead.
+    - Exactly one "N x <size>" group ("6 x 40'HC", "2x40HC", "10 X 40HC") is
+      the unambiguous case: that single quantity is the count.
+    - No "N x <size>" pattern at all falls back to the old leading-integer
+      rule ("6", "6 CONTAINERS", and "2 X 40 *" where the trailing "*" is
+      noise, not a second multiplier - see _COUNT_TERM above).
     """
     text = _as_text(value)
     if text is None:
         return None
+    if _SIZE_BEFORE_MULTIPLIER.search(text):
+        return None
     terms = _COUNT_TERM.findall(text)
-    if terms:
-        try:
-            return sum(int(term) for term in terms)
-        except ValueError:
-            return None
+    if len(terms) == 1:
+        return int(terms[0])
+    if len(terms) > 1:
+        return None
     m = _LEADING_INT.match(text)
     if not m:
         return None
-    try:
-        return int(m.group())
-    except ValueError:
-        return None
+    return int(m.group())
 
 
 def normalise_weight(value: str) -> "int | None":

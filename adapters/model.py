@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 
 MODEL = "claude-haiku-4-5"
@@ -185,10 +186,15 @@ def complete_json(prompt: str, *, schema_hint: str, max_tokens: int = 512) -> di
             # unparseable reply, not for an error that is certain to repeat.
             last = exc
             break
-        except Exception as exc:  # timeout after SDK retries, or unparseable reply
+        except Exception as exc:
+            # A timeout, a transient 429/5xx, or an unparseable reply. The
+            # SDK no longer retries any of these itself (max_retries=0, see
+            # above), so this loop's second attempt is the only retrying
+            # that happens for them.
             last = exc
             if attempt == 2:
                 break
+            time.sleep(1)  # a brief pause before the one retry, not a backoff chain
 
     STATS.failures += 1
     raise ModelUnavailable(f"model call failed after retry: {last}") from last
