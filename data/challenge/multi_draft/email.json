@@ -1,0 +1,7 @@
+{
+  "email_id": "challenge_multi_draft",
+  "from": "docs@example.com",
+  "subject": "Please verify both draft BL versions against the SI",
+  "body": "Two candidate drafts are attached. A human must choose the intended version; attachment order is not a decision rule.",
+  "attachments": ["multi_SI.txt", "multi_BL_v1.txt", "multi_BL_v2.txt"]
+}

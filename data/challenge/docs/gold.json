@@ -61,5 +61,71 @@
       "gross_weight_kg": "71,540 KG"
     },
     "defect_fields": []
+  },
+  "unit_mt": {
+    "si": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22 MT"},
+    "bl": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "defect_fields": [],
+    "case": "supported_unit_conversion"
+  },
+  "unit_lbs": {
+    "si": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,046.226 LBS"},
+    "bl": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "10,000 KG"},
+    "defect_fields": [],
+    "case": "supported_unit_conversion"
+  },
+  "unit_unsupported": {
+    "si": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22 STONE"},
+    "bl": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22 KG"},
+    "defect_fields": [],
+    "undecidable_fields": ["gross_weight_kg"],
+    "case": "unsupported_unit_escalation"
+  },
+  "compound_count": {
+    "si": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 20GP + 2 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "bl": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "3 CONTAINERS", "gross_weight_kg": "22,000 KG"},
+    "defect_fields": [],
+    "undecidable_fields": ["container_count"],
+    "case": "compound_container_quantity"
+  },
+  "suffix_abbreviation": {
+    "si": {"shipper": "Atlas Paper Company Limited", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "bl": {"shipper": "ATLAS PAPER CO LTD", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "defect_fields": ["shipper"],
+    "variance": {"shipper": "suffix_abbreviation"},
+    "case": "controlled_formatting_variation"
+  },
+  "token_reorder": {
+    "si": {"shipper": "Pacific Star Trading LLC", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "bl": {"shipper": "TRADING PACIFIC STAR LLC", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "defect_fields": ["shipper"],
+    "variance": {"shipper": "token_reorder"},
+    "case": "controlled_formatting_variation"
+  },
+  "country_suffix": {
+    "si": {"shipper": "Nova Pulp Trading", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "bl": {"shipper": "NOVA PULP TRADING MALAYSIA", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "defect_fields": ["shipper"],
+    "variance": {"shipper": "country_suffix"},
+    "case": "controlled_formatting_variation"
+  },
+  "punctuation": {
+    "si": {"shipper": "Atlas Paper Co., Ltd.", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "bl": {"shipper": "ATLAS PAPER CO LTD", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "defect_fields": [],
+    "case": "punctuation_equivalence"
+  },
+  "side_by_side": {
+    "si": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "bl": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Harbour Agents LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "defect_fields": [],
+    "files": {"si": "side_by_side_SI.txt", "bl": "side_by_side_BL.pdf"},
+    "case": "side_by_side_pdf_layout"
+  },
+  "placement_guard": {
+    "si": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Blue Ocean Trading LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "bl": {"shipper": "Atlas Paper Ltd", "consignee": "Blue Ocean Trading LLC", "notify_party": "Blue Ocean Trading LLC", "port_of_loading": "Port Klang, Malaysia", "port_of_discharge": "Jebel Ali, UAE", "container_count": "1 x 40HC", "gross_weight_kg": "22,000 KG"},
+    "defect_fields": [],
+    "case": "model_field_placement"
   }
 }

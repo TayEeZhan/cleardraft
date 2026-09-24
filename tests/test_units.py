@@ -23,6 +23,13 @@ def test_parses_mt() -> None:
     assert w.unit == "MT"
 
 
+def test_parses_contract_ton_as_metric_tonne() -> None:
+    w = parse_weight("22.5 TON")
+    assert w is not None
+    assert w.kg == 22500
+    assert w.unit == "TON"
+
+
 def test_parses_lbs() -> None:
     w = parse_weight("1000 LBS")
     assert w.unit == "LBS"

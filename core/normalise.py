@@ -197,12 +197,13 @@ def normalise_container_count(value: str) -> "int | None":
     return int(m.group())
 
 
-def normalise_weight(value: str) -> "int | None":
+def normalise_weight(value: object) -> "int | None":
     """gross_weight_kg.
 
-    Delegates to core.units.to_kilograms, which converts KG/KGS/MT/LBS (and common
-    spellings) to kilograms before rounding, instead of discarding the unit - see
-    that module for the full conversion table and why "TON" is deliberately excluded.
+    Delegates to core.units.to_kilograms, which parses the numeric value and
+    unit together, converts supported units explicitly, and fails closed for
+    unsupported formats. A bare value remains kilograms because the .xlsx
+    renderer emits bare numeric cells.
 
     A decimal point must survive parsing. Deleting it turns "21,577.00 KGS" - a very
     common real-world rendering - into 2157700, a silent 100x error that guarantees a

@@ -54,6 +54,10 @@ class ModelStats:
     #: Model answers thrown away because they did not appear in the source
     #: document. The anti-hallucination gate, counted rather than asserted.
     gate_rejections: int = 0
+    #: Answers that appeared on the page but only under another known field,
+    #: or crossed a physical line boundary. Kept separate because this is an
+    #: assignment failure, not an invented-value failure.
+    placement_rejections: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -63,6 +67,7 @@ class ModelStats:
             "output_tokens": self.output_tokens,
             "failures": self.failures,
             "gate_rejections": self.gate_rejections,
+            "placement_rejections": self.placement_rejections,
         }
 
 

@@ -14,15 +14,15 @@ converts every supported unit to kilograms before the two sides of a shipment ar
 compared, so a genuine 1000x/2.2x mislabelling shows up as a real difference, and a
 same-weight-different-unit case does not show up as one.
 
-Deliberately excluded: "TON"/"TONS"/"T". A US short ton is 907.18 kg, a metric tonne
-("MT"/"TONNE") is 1000 kg, and nothing in a shipping document tells us which one a bare
-"TON" means. Guessing would trade one silent unit bug for another - exactly the class of
-bug this module exists to prevent - so an unqualified ton is rejected, not assumed.
+The challenge contract treats singular "TON" as a metric tonne, so it converts at
+1000 kg alongside MT/TONNE. Less precise shorthand ("T") and unsupported plural
+"TONS" remain rejected rather than guessed.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 #: number part: digits plus the two separators seen in this dataset ("21,577",
 #: "21.577", "22.5").
@@ -37,9 +37,10 @@ _SHAPE = re.compile(rf"^\s*({_NUMBER})\s*({_UNIT})\s*$")
 #: "21.577" is twenty-one thousand in European notation, not 21.577. Copied from
 #: core.normalise's old _DOT_THOUSANDS so number parsing behaves identically.
 _DOT_THOUSANDS = re.compile(r"^\d{1,3}(?:\.\d{3})+$")
+_COMMA_THOUSANDS = re.compile(r"^\d{1,3}(?:,\d{3})+$")
 
 #: canonical unit -> factor to multiply the parsed number by to get kilograms.
-#: EXACTLY these tokens - see module docstring for why TON/TONS/T/QTL are absent.
+#: EXACTLY these tokens - see module docstring for why T/TONS/QTL are absent.
 #:
 #: MT/MTS/TONNE/TONNES are exact at x1000 - that is the realistic case in this
 #: dataset (every planted weight defect is a whole MT/KG relabelling). LB/LBS are
@@ -51,13 +52,15 @@ _DOT_THOUSANDS = re.compile(r"^\d{1,3}(?:\.\d{3})+$")
 #: thresholds precisely because every fuzzy threshold risks swallowing a real
 #: defect, so a 1 kg pound-rounding gap escalates like any other difference
 #: instead of being silently forgiven.
-_FACTORS: dict[str, float] = {
-    "": 1.0,
-    "KG": 1.0, "KGS": 1.0, "KGM": 1.0,
-    "KILO": 1.0, "KILOS": 1.0, "KILOGRAM": 1.0, "KILOGRAMS": 1.0,
-    "MT": 1000.0, "MTS": 1000.0, "TONNE": 1000.0, "TONNES": 1000.0,
-    "LB": 0.45359237, "LBS": 0.45359237,
-    "POUND": 0.45359237, "POUNDS": 0.45359237,
+_FACTORS: dict[str, Decimal] = {
+    "": Decimal("1"),
+    "KG": Decimal("1"), "KGS": Decimal("1"), "KGM": Decimal("1"),
+    "KILO": Decimal("1"), "KILOS": Decimal("1"),
+    "KILOGRAM": Decimal("1"), "KILOGRAMS": Decimal("1"),
+    "MT": Decimal("1000"), "MTS": Decimal("1000"), "TON": Decimal("1000"),
+    "TONNE": Decimal("1000"), "TONNES": Decimal("1000"),
+    "LB": Decimal("0.45359237"), "LBS": Decimal("0.45359237"),
+    "POUND": Decimal("0.45359237"), "POUNDS": Decimal("0.45359237"),
 }
 #: Two values are only a UNIT discrepancy when their conversion factors differ.
 #: Comparing the factor rather than the token means every alternative spelling of
@@ -94,6 +97,30 @@ def _canonical_unit(raw: str) -> str:
     return raw.upper().replace(".", "").replace("/", "").replace(" ", "")
 
 
+def _parse_number(text: str) -> "Decimal | None":
+    """Parse US or European separators without deleting decimal precision."""
+    if "," in text and "." in text:
+        # The final separator is decimal; the other is a thousands separator.
+        if text.rfind(".") > text.rfind(","):
+            text = text.replace(",", "")
+        else:
+            text = text.replace(".", "").replace(",", ".")
+    elif _DOT_THOUSANDS.fullmatch(text):
+        text = text.replace(".", "")
+    elif _COMMA_THOUSANDS.fullmatch(text):
+        text = text.replace(",", "")
+    elif "," in text:
+        if text.count(",") != 1:
+            return None
+        text = text.replace(",", ".")
+    elif text.count(".") > 1:
+        return None
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError, OverflowError):
+        return None
+
+
 def parse_weight(value: object) -> "Weight | None":
     """Parse free-text weight into kilograms + its written unit. Never raises:
     unparseable input, an unsupported unit, or trailing junk after the unit
@@ -110,13 +137,13 @@ def parse_weight(value: object) -> "Weight | None":
     factor = _FACTORS.get(unit)
     if factor is None:
         return None
-    s = number_part
-    if _DOT_THOUSANDS.match(s):
-        s = s.replace(".", "")          # European notation: dots are thousands seps
-    s = s.replace(",", "")              # comma is a thousands separator here
+    number = _parse_number(number_part)
+    if number is None:
+        return None
     try:
-        kg = int(round(float(s) * factor))
-    except (ValueError, OverflowError):
+        kilograms = number * factor
+        kg = int(kilograms.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, ValueError, OverflowError):
         return None
     return Weight(kg=kg, unit=unit)
 

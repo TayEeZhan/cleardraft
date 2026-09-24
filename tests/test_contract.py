@@ -81,6 +81,29 @@ def test_split_si_bl_falls_back_to_filename() -> None:
     assert bl is not None and bl.path.endswith("_BL.txt")
 
 
+def test_candidate_docs_returns_every_si_and_bl_in_attachment_order() -> None:
+    docs = [
+        ExtractedDoc(path="first_BL.txt", kind="BL"),
+        ExtractedDoc(path="only_SI.txt", kind="SI"),
+        ExtractedDoc(path="second_BL.txt", kind="BL"),
+        ExtractedDoc(path="notes.txt", kind="OTHER"),
+    ]
+    sis, bls = pipeline.candidate_docs(docs)
+    assert [doc.path for doc in sis] == ["only_SI.txt"]
+    assert [doc.path for doc in bls] == ["first_BL.txt", "second_BL.txt"]
+
+
+def test_split_si_bl_preserves_documented_first_candidate_default() -> None:
+    docs = [
+        ExtractedDoc(path="first_BL.txt", kind="BL"),
+        ExtractedDoc(path="only_SI.txt", kind="SI"),
+        ExtractedDoc(path="second_BL.txt", kind="BL"),
+    ]
+    si, bl = pipeline.split_si_bl(docs)
+    assert si.path == "only_SI.txt"
+    assert bl.path == "first_BL.txt"
+
+
 def test_seven_compare_fields_exactly() -> None:
     assert len(COMPARE_FIELDS) == 7
     assert len(set(COMPARE_FIELDS)) == 7
@@ -109,6 +132,42 @@ def test_weight_survives_a_decimal_point() -> None:
     assert norm.normalise_weight("21.577") == 21577      # European thousands
     assert norm.normalise_weight("21,577 KG") == 21577
     assert norm.normalise_weight("341715") == 341715     # bare xlsx integer
+
+
+def test_weight_units_cannot_be_silently_discarded() -> None:
+    assert norm.normalise_weight("22 MT") == 22000
+    assert norm.normalise_weight("22 KG") == 22
+    assert norm.normalise_weight("22 MT") != norm.normalise_weight("22 KG")
+    assert norm.normalise_weight("22 STONE") is None
+
+
+def test_supported_weight_units_are_compared_in_kilograms() -> None:
+    from core.types import FieldValue
+
+    tonnes = FieldValue(value="22 MT", raw="Gross Weight: 22 MT", line_no=1, label="Gross Weight")
+    kilograms = FieldValue(value="22 KG", raw="Gross Weight: 22 KG", line_no=1, label="Gross Weight")
+    rows = compare_mod.compare(
+        ExtractedDoc(path="x_SI.txt", kind="SI", fields={"gross_weight_kg": tonnes}),
+        ExtractedDoc(path="x_BL.txt", kind="BL", fields={"gross_weight_kg": kilograms}),
+    )
+    weight = next(row for row in rows if row.field == "gross_weight_kg")
+    assert weight.undecidable is False
+    assert weight.matched is False
+    assert (weight.si_norm, weight.bl_norm) == (22000, 22)
+
+
+def test_unsupported_weight_unit_escalates_the_comparison() -> None:
+    from core.types import FieldValue
+
+    unsupported = FieldValue(value="22 STONE", raw="Gross Weight: 22 STONE", line_no=1, label="Gross Weight")
+    kilograms = FieldValue(value="22 KG", raw="Gross Weight: 22 KG", line_no=1, label="Gross Weight")
+    rows = compare_mod.compare(
+        ExtractedDoc(path="x_SI.txt", kind="SI", fields={"gross_weight_kg": unsupported}),
+        ExtractedDoc(path="x_BL.txt", kind="BL", fields={"gross_weight_kg": kilograms}),
+    )
+    weight = next(row for row in rows if row.field == "gross_weight_kg")
+    assert weight.undecidable is True
+    assert weight.matched is False
 
 
 def test_normalisers_absorb_formatting() -> None:

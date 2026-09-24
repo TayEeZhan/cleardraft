@@ -28,6 +28,7 @@ from core.recheck import recheck
 from core.reply import FIELD_LABELS, _reference, draft_reply, draft_recheck_reply
 from core.types import COMPARE_FIELDS
 from core.units import describe_unit_difference, parse_weight
+from core.variance import comparison_variance
 
 
 def _fv(field_value, source: str) -> "dict | None":
@@ -178,6 +179,7 @@ def build_rows(
                 "label": FIELD_LABELS.get(c.field, c.field),
                 "matched": c.matched,
                 "undecidable": c.undecidable,
+                "variance_reason": comparison_variance(c),
                 "si": _fv(c.si, rel(si.path) if si else ""),
                 "bl": _fv(c.bl, rel(bl.path) if bl else ""),
                 **_unit_fields(c),

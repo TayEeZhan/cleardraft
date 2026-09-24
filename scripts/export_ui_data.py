@@ -84,6 +84,7 @@ def main() -> int:
             "calls": ch["model_stats"]["calls"],
             "tokens": ch["model_stats"]["input_tokens"] + ch["model_stats"]["output_tokens"],
             "gate_rejections": ch["model_stats"]["gate_rejections"],
+            "placement_rejections": ch["model_stats"].get("placement_rejections", 0),
         }
 
     out = os.path.join(ROOT, "web", "public", "data.json")
