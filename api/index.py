@@ -14,6 +14,9 @@ Routes:
                                   subject/body + attachments), run it end to
                                   end through classify/extract/compare/decide,
                                   same as the dataset path in core/pipeline.py
+    POST /api/process-dataset  - upload a .zip bundle (inbox/*.json +
+                                  attachments/*) and run the whole batch
+                                  pipeline over it live: see api/_dataset.py
     /api/auth/*, /api/mail*    - accounts: see api/_accounts.py
 
 Accounts note: /api/auth/* and /api/mail* are owned by api/_accounts.py and
@@ -43,6 +46,7 @@ from adapters.model import MODEL, STATS  # noqa: E402
 from adapters.model import available as model_available, switch_enabled as model_switch_enabled  # noqa: E402
 from adapters.store import StoreError, get_store  # noqa: E402
 from api._accounts import current_user, router as accounts_router, save_result_to_mailbox  # noqa: E402
+from api._dataset import router as dataset_router  # noqa: E402
 from api._equivalences import lookup_for, router as equivalences_router  # noqa: E402
 from core import parsers  # noqa: E402
 from core.classify import classify  # noqa: E402
@@ -56,6 +60,7 @@ from core.types import Classification, Email  # noqa: E402
 app = FastAPI()
 app.include_router(accounts_router)
 app.include_router(equivalences_router)
+app.include_router(dataset_router)
 
 
 @app.exception_handler(StoreError)

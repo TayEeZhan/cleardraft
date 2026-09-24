@@ -81,6 +81,7 @@
     <div class="source-switch" role="group" aria-label="Mail source">
       <button type="button" class="switch-btn" id="switch-mine" aria-pressed="true">Your mail (<span id="mine-count">0</span>)</button>
       <button type="button" class="switch-btn" id="switch-sample" aria-pressed="false">Sample company inbox (<span id="sample-count">520</span>)</button>
+      <button type="button" class="switch-btn" id="switch-uploaded" aria-pressed="false" hidden></button>
     </div>
 
     <input type="file" id="mail-file-input" class="drop-input" multiple accept=".eml,message/rfc822">
@@ -88,11 +89,14 @@
     <div id="upload-panel" class="upload-panel" hidden></div>
     <div id="upload-progress" class="upload-progress" aria-live="polite" hidden></div>
     <div id="upload-errors" class="upload-errors" aria-live="polite" hidden></div>
+    <div id="dataset-upload-progress" class="upload-progress" aria-live="polite" hidden></div>
+    <div id="dataset-upload-result" class="upload-panel" aria-live="polite" hidden></div>
 
     <div class="addmail" id="addmail-panel" hidden>
       <div class="addmail-tabs" role="tablist" aria-label="Add an email">
         <button type="button" class="switch-btn" id="addmail-tab-drop" role="tab" aria-selected="true">Drop .eml files</button>
         <button type="button" class="switch-btn" id="addmail-tab-paste" role="tab" aria-selected="false">Paste an email</button>
+        <button type="button" class="switch-btn" id="addmail-tab-dataset" role="tab" aria-selected="false">Upload a dataset (.zip)</button>
       </div>
 
       <div class="addmail-section" id="addmail-drop">
@@ -129,6 +133,16 @@
           </div>
         </form>
       </div>
+
+      <div class="addmail-section" id="addmail-dataset" hidden>
+        <div class="drop-zone drop-zone-large" id="dataset-drop-zone">
+          <label for="dataset-file-input" class="drop-label">
+            <span class="drop-title">Upload a dataset (.zip)</span>
+            <span class="drop-hint">The company's inbox as a .zip (inbox/ + attachments/). Processed live; nothing is stored on the server.</span>
+          </label>
+          <input type="file" id="dataset-file-input" class="drop-input" accept=".zip,application/zip">
+        </div>
+      </div>
     </div>
 
     <p class="mine-privacy" id="mine-privacy-line" hidden></p>
@@ -156,6 +170,9 @@
         <div class="mine-actions" id="mine-actions" hidden>
           <button type="button" class="btn btn-quiet" id="add-emails-btn">Add emails</button>
           <button type="button" class="link-btn" id="clear-mine-btn">Clear your mail</button>
+        </div>
+        <div class="mine-actions" id="uploaded-actions" hidden>
+          <button type="button" class="link-btn" id="remove-uploaded-btn">Remove uploaded dataset</button>
         </div>
       </div>
 

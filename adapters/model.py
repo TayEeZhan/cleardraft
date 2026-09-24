@@ -13,12 +13,33 @@ nothing here.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import time
 from dataclasses import dataclass
 
 MODEL = "claude-haiku-4-5"
+
+#: An optional per-request model budget: [attempts_left, deadline] (deadline
+#: is a time.monotonic() timestamp), or None for "no budget" (every existing
+#: caller - /api/check, /api/process-email, scripts/*). Set with
+#: `_BUDGET.set([...])` around a unit of work (e.g. api/_dataset.py wraps one
+#: /api/process-dataset request); contextvars propagate into an
+#: `asyncio`/`run_in_threadpool` task started from that context, so the
+#: budget reaches every model call the request makes without threading a
+#: parameter through core/classify.py and core/extract.py.
+#:
+#: Attempts, not successful calls: STATS.calls only counts a call that
+#: actually returned, so under a provider outage every attempt would fail
+#: without ever decrementing a "calls" counter, and the budget would never
+#: fill - the request would keep retrying at ~20s a shot until Vercel's own
+#: timeout cut it off. Counting every ATTEMPT (see complete_json below) means
+#: a string of failures burns through the budget just as fast as a string of
+#: successes would.
+_BUDGET: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
+    "cleardraft_budget", default=None
+)
 
 
 @dataclass
@@ -106,7 +127,16 @@ def available() -> bool:
 
     CLEARDRAFT_USE_MODEL=0 turns the model tier off without touching the key -
     that is how we demonstrate, honestly, what the rules decide on their own.
+
+    Also false once the current request's budget (see _BUDGET) is exhausted
+    or its deadline has passed - checked first, so a budgeted caller gets a
+    plain "no" the instant either limit is hit, the same shape as "no key
+    configured" from every caller's point of view (ModelUnavailable, fall
+    back to the rule tier).
     """
+    budget = _BUDGET.get()
+    if budget is not None and (budget[0] <= 0 or time.monotonic() >= budget[1]):
+        return False
     if not switch_enabled():
         return False
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
@@ -145,21 +175,42 @@ def complete_json(prompt: str, *, schema_hint: str, max_tokens: int = 512) -> di
     except ImportError as exc:
         raise ModelUnavailable(f"anthropic SDK not installed: {exc}") from exc
 
-    # timeout=20.0: a hung connection must not stall the batch run indefinitely.
-    # max_retries=0: the SDK's own retry-with-backoff would double up with the
-    # 2-attempt loop below, and a long backoff chain turns one provider blip
-    # into a stalled batch across 520 emails.
-    client = anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"], timeout=20.0, max_retries=0
-    )
     system = (
         "You extract structured data from shipping operations email. "
         "Reply with one JSON object and nothing else. No prose, no markdown. "
         f"Required shape: {schema_hint}"
     )
 
+    budget = _BUDGET.get()
     last: "Exception | None" = None
     for attempt in (1, 2):
+        # Re-checked every attempt, not just once up front: a budgeted
+        # caller's deadline can pass, or its attempt count can hit zero,
+        # between attempt 1 and attempt 2.
+        if not available():
+            break
+
+        # timeout=20.0 by default: a hung connection must not stall the
+        # batch run indefinitely. Under a budget, capped to whatever is left
+        # of the deadline so one call can never itself blow past it - a
+        # remaining time of zero or less means skip the call rather than
+        # start one that is already out of time.
+        call_timeout = 20.0
+        if budget is not None:
+            remaining = budget[1] - time.monotonic()
+            if remaining <= 0:
+                break
+            call_timeout = min(call_timeout, remaining)
+            # Every ATTEMPT counts against the budget, success or failure -
+            # see _BUDGET's docstring for why failures must count too.
+            budget[0] -= 1
+
+        # max_retries=0: the SDK's own retry-with-backoff would double up
+        # with this loop's own 2 attempts, and a long backoff chain turns
+        # one provider blip into a stalled batch across 520 emails.
+        client = anthropic.Anthropic(
+            api_key=os.environ["ANTHROPIC_API_KEY"], timeout=call_timeout, max_retries=0
+        )
         try:
             resp = client.messages.create(
                 model=MODEL,

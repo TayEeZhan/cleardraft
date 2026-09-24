@@ -581,23 +581,30 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .paste-form { display: flex; flex-direction: column; gap: 14px; max-width: 560px; }
 .paste-files-input { padding: 8px 11px; }
 
-/* ── Your mail / Sample source switch ──────────────────────── */
+/* ── Your mail / Sample / Uploaded source switch ─────────────── */
 .source-switch {
-  display: inline-flex; gap: 2px; padding: 3px;
+  display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px;
   background: var(--surface-2); border: 1px solid var(--rule);
-  border-radius: var(--r); margin-bottom: 20px;
+  border-radius: var(--r); margin-bottom: 20px; max-width: 100%;
 }
 .switch-btn {
   font-family: inherit; font-size: 13.5px; font-weight: 500;
   color: var(--ink-2); background: none; border: 0; cursor: pointer;
   padding: 9px 14px; min-height: 40px; border-radius: 5px;
+  /* The uploaded dataset's own name is attacker-chosen (a zip filename) and
+     unbounded in length — clip it rather than let one long name force the
+     whole switch, or the page, to scroll sideways. */
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .switch-btn:hover { color: var(--ink); }
 .switch-btn[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); font-weight: 600; }
 
 @media (max-width: 520px) {
+  /* Wrap rather than force three buttons into equal thirds — a long
+     "Uploaded: <name> (N)" label would otherwise squeeze the others
+     unreadably narrow or push the row past the viewport. */
   .source-switch { display: flex; width: 100%; }
-  .switch-btn { flex: 1; padding: 9px 8px; font-size: 12.5px; }
+  .switch-btn { flex: 1 1 auto; min-width: 30%; padding: 9px 8px; font-size: 12.5px; }
 }
 
 /* ── Your mail: empty state ────────────────────────────────── */
@@ -662,6 +669,12 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .upload-errors-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
 .upload-error-row { font-size: 12.5px; color: var(--ink-2); padding: 3px 0; }
 .upload-error-row b { color: var(--ink); font-weight: 600; }
+
+.dataset-upload-summary {
+  font-size: 13.5px; font-weight: 500; color: var(--match);
+  background: var(--match-bg); border: 1px solid var(--match);
+  border-radius: var(--r); padding: 10px 14px; margin-bottom: 16px;
+}
 
 /* ── Uploaded case tag + original email (case review) ──────── */
 .uploaded-tag { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
