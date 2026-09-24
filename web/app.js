@@ -182,17 +182,21 @@ function renderBoard() {
 
   for (const r of rows.slice(0, 200)) {
     const a = el("a", "case");
-    if (isReviewed(r.email_id)) a.classList.add("case-done");
+    const rowReview = getReview(r.email_id);
+    // A "problem found" on a needs-a-human case is not a clean check —
+    // ClearDraft never rendered a verdict there for the clerk to rubber
+    // stamp, so it must not look like a routine "Done" row.
+    const problemFound = Boolean(rowReview && rowReview.verdict === "done" && rowReview.note && rowReview.note.startsWith("problem:"));
+    if (isReviewed(r.email_id) && !problemFound) a.classList.add("case-done");
     a.href = `#/case/${r.email_id}`;
     a.setAttribute("role", "listitem");
     a.append(el("div", "case-ref", r.reference));
     a.append(el("div", "case-subject", r.subject));
 
     const tags = el("div", "case-fields");
-    const rowReview = getReview(r.email_id);
     if (rowReview) {
-      const chipCls = rowReview.verdict === "confirmed" ? "chip-confirmed" : rowReview.verdict === "flagged" ? "chip-flagged" : "chip-done";
-      const chipTxt = rowReview.verdict === "confirmed" ? "Confirmed" : rowReview.verdict === "flagged" ? "Flagged" : "Done";
+      const chipCls = rowReview.verdict === "confirmed" ? "chip-confirmed" : rowReview.verdict === "flagged" || problemFound ? "chip-flagged" : "chip-done";
+      const chipTxt = rowReview.verdict === "confirmed" ? "Confirmed" : rowReview.verdict === "flagged" ? "Flagged" : problemFound ? "Problem found" : "Done";
       tags.append(el("span", `chip ${chipCls}`, chipTxt));
     }
     if (r.status === "MISMATCH") {
@@ -912,8 +916,7 @@ function replyCard(d, text, title, earlier) {
   gmailBtn.type = "button";
   gmailBtn.addEventListener("click", async () => {
     REPLY_OPENED.add(d.email_id);
-    const doneBar = document.querySelector(".done-bar");
-    if (doneBar) doneBar.replaceWith(reviewBar(d));
+    refreshDoneBarForReply(d);
     const currentText = ta.value;
     const toPart = d.from ? `&to=${encodeURIComponent(d.from)}` : "";
     const url = `https://mail.google.com/mail/?view=cm&fs=1${toPart}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(currentText)}`;
@@ -936,8 +939,7 @@ function replyCard(d, text, title, earlier) {
   copyBtn.type = "button";
   copyBtn.addEventListener("click", async () => {
     REPLY_OPENED.add(d.email_id);
-    const doneBar = document.querySelector(".done-bar");
-    if (doneBar) doneBar.replaceWith(reviewBar(d));
+    refreshDoneBarForReply(d);
     try {
       await navigator.clipboard.writeText(ta.value);
       toast("Reply copied.");
@@ -953,8 +955,7 @@ function replyCard(d, text, title, earlier) {
   otherBtn.href = mailtoHref(startText);
   otherBtn.addEventListener("click", () => {
     REPLY_OPENED.add(d.email_id);
-    const doneBar = document.querySelector(".done-bar");
-    if (doneBar) doneBar.replaceWith(reviewBar(d));
+    refreshDoneBarForReply(d);
     toast("Draft opened in your mail app. Check it, then press Send.");
   });
   foot.append(otherBtn);
@@ -1029,7 +1030,7 @@ function navigateToCase(id) {
   route();
 }
 
-function goToBoardTab(source, tab, query, message) {
+function goToBoardTab(source, tab, query, message, action) {
   setSourceKey(source);
   TAB = tab;
   for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
@@ -1038,10 +1039,15 @@ function goToBoardTab(source, tab, query, message) {
   if (searchInput) searchInput.value = QUERY;
   history.pushState(null, "", "#/board");
   route();
-  if (message) toast(message);
+  if (message) toast(message, action);
 }
 
-function advanceCase(id, context, { requireUndone }) {
+/* undoAction (optional) is the {label, onClick} confirmToast() already put on
+   screen for this save. When this call ends up showing its own toast (the
+   mismatch → needs-a-human roll-over, or "all reviewed"), that toast replaces
+   the confirm one — so the same action is carried over onto it, or Undo
+   would quietly vanish the moment the last case in a tab gets confirmed. */
+function advanceCase(id, context, { requireUndone, undoAction }) {
   const { list, source, tab, query } = context;
   const idx = list.findIndex((r) => r.email_id === id);
   if (idx === -1) { goToBoardTab(source, tab, query, null); return; }
@@ -1056,31 +1062,62 @@ function advanceCase(id, context, { requireUndone }) {
   /* Every discrepancy in this source is reviewed. Rather than dump the
      clerk back on an empty tab, walk them straight into the tab ClearDraft
      could not decide for itself — that queue is the one still owed
-     attention, and it is easy to forget once the mismatch pile is clear. */
+     attention, and it is easy to forget once the mismatch pile is clear.
+     Only when NONE remain anywhere for this source, though — a case hidden
+     by the current search is still an unreviewed case, so an active filter
+     must not trigger the roll-over early. */
   if (tab === "mismatch") {
-    const needsReview = computeFilteredList(source, "needs_review", "").find((r) => !isReviewed(r.email_id));
-    if (needsReview) {
-      TAB = "needs_review";
-      for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === "needs_review"));
-      navigateToCase(needsReview.email_id);
-      toast(`Discrepancies done — now: ${TAB_LABELS.needs_review} (N)`);
-      return;
+    const anyUnreviewedMismatch = computeFilteredList(source, "mismatch", "").some((r) => !isReviewed(r.email_id));
+    if (!anyUnreviewedMismatch) {
+      const needsReview = computeFilteredList(source, "needs_review", "").find((r) => !isReviewed(r.email_id));
+      if (needsReview) {
+        TAB = "needs_review";
+        for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === "needs_review"));
+        navigateToCase(needsReview.email_id);
+        toast(`Discrepancies done — now: ${TAB_LABELS.needs_review} (N)`, undoAction);
+        return;
+      }
     }
   }
-  goToBoardTab(source, tab, query, `All reviewed in ${TAB_LABELS[tab]}.`);
+  goToBoardTab(source, tab, query, `All reviewed in ${TAB_LABELS[tab]}.`, undoAction);
 }
 
 /* A small, undoable confirmation: every save (button or the D key) tells the
    clerk what just got recorded and offers one click to take it back, so a
    fast click-through never becomes an un-fixable mistake once the page has
-   already moved to the next case. */
-function confirmToast(d) {
+   already moved to the next case. Returns the action object so a caller that
+   goes on to call advanceCase() can hand the same Undo to whatever toast
+   advanceCase shows next (see advanceCase's undoAction param). */
+function confirmToast(d, verb) {
   const id = d.email_id;
   const ref = d.reference || id;
-  toast(`Confirmed ${ref}`, {
-    label: "Undo",
-    onClick: () => { clearReview(id); navigateToCase(id); },
-  });
+  const action = { label: "Undo", onClick: () => { clearReview(id); navigateToCase(id); } };
+  toast(`${verb} ${ref}`, action);
+  return action;
+}
+
+/* Reopening a reply (Gmail / Copy / Other mail app) after the clerk has
+   already started typing a "Something's wrong" / "I found a problem" note
+   must not blow that note away — rebuilding the whole bar rebuilds a fresh,
+   empty textarea. So while that note form is open, only the bit REPLY_OPENED
+   actually changes (the mismatch primary button's wording, plus a small
+   marker) gets touched in place; the full rebuild only happens when there is
+   no in-progress note to lose. */
+function refreshDoneBarForReply(d) {
+  const bar = document.querySelector(".done-bar");
+  if (!bar) return;
+  const noteForm = bar.querySelector(".review-flag-form");
+  if (noteForm && !noteForm.hidden) {
+    if (verdictKind(d) === "mismatch") {
+      if (!bar.querySelector(".reply-opened-chip")) {
+        bar.insertBefore(el("span", "chip chip-quiet reply-opened-chip", "Reply opened"), bar.firstChild);
+      }
+      const primary = bar.querySelector(".done-bar-actions .btn-primary");
+      if (primary) primary.textContent = "Reply sent — next case";
+    }
+    return;
+  }
+  bar.replaceWith(reviewBar(d));
 }
 
 /* The inline "what's wrong" note field, shared by the discrepancy/match
@@ -1173,9 +1210,9 @@ function reviewBar(d) {
     checkedBtn.type = "button";
     checkedBtn.addEventListener("click", () => {
       setReview(id, "done", "checked by hand: documents agree");
-      confirmToast(d);
+      const undo = confirmToast(d, "Checked");
       if (!context) return;
-      advanceCase(id, context, { requireUndone: true });
+      advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
     actions.append(checkedBtn);
 
@@ -1188,9 +1225,9 @@ function reviewBar(d) {
 
     const noteForm = buildReviewNoteForm(id, "Save and next case", (note) => {
       setReview(id, "done", `problem: ${note}`);
-      confirmToast(d);
+      const undo = confirmToast(d, "Problem noted");
       if (!context) return;
-      advanceCase(id, context, { requireUndone: true });
+      advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
     bar.append(noteForm.form);
 
@@ -1201,7 +1238,7 @@ function reviewBar(d) {
     });
   } else {
     const replySent = kind === "mismatch" && REPLY_OPENED.has(id);
-    if (replySent) bar.append(el("span", "chip chip-quiet", "Reply opened"));
+    if (replySent) bar.append(el("span", "chip chip-quiet reply-opened-chip", "Reply opened"));
 
     const actions = el("div", "done-bar-actions");
 
@@ -1212,9 +1249,9 @@ function reviewBar(d) {
     confirmBtn.type = "button";
     confirmBtn.addEventListener("click", () => {
       setReview(id, "confirmed");
-      confirmToast(d);
+      const undo = confirmToast(d, "Confirmed");
       if (!context) return;
-      advanceCase(id, context, { requireUndone: true });
+      advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
     actions.append(confirmBtn);
 
@@ -1235,9 +1272,9 @@ function reviewBar(d) {
 
     const noteForm = buildReviewNoteForm(id, "Save and next case", (note) => {
       setReview(id, "flagged", note);
-      confirmToast(d);
+      const undo = confirmToast(d, "Flagged");
       if (!context) return;
-      advanceCase(id, context, { requireUndone: true });
+      advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
     bar.append(noteForm.form);
 
@@ -1253,15 +1290,21 @@ function reviewBar(d) {
     bar.append(el("div", "done-bar-pos", `Case ${idx + 1} of ${context.list.length} in ${TAB_LABELS[context.tab]}`));
   }
 
-  bar.append(el("div", "done-bar-hint", "D confirm · N skip"));
+  /* On an unreviewed needs-a-human case, D does not confirm anything — it
+     just points at the two buttons above — so the hint says only what D
+     actually still does there. */
+  const hintText = !review && kind === "review" ? "N skip" : "D confirm · N skip";
+  bar.append(el("div", "done-bar-hint", hintText));
   return bar;
 }
 
-/* "n" = Skip to next. "d" confirms — except on a needs-a-human case, where
-   ClearDraft deliberately did not decide: there, "d" records nothing and
-   just tells the clerk to pick an outcome below, so a reflexive keypress can
-   never silently clear an escalation. Ignored while typing anywhere, or with
-   a modifier held, so it never fights the reply textarea. */
+/* "n" = Skip to next. "d" confirms — except on an unreviewed needs-a-human
+   case, where ClearDraft deliberately did not decide: there, "d" records
+   nothing and just tells the clerk to pick an outcome below, so a reflexive
+   keypress can never silently clear an escalation. Once that case has been
+   reviewed (by either button), "d" behaves like everywhere else and simply
+   advances. Ignored while typing anywhere, or with a modifier held, so it
+   never fights the reply textarea. */
 function initCaseKeyboardNav() {
   addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1282,15 +1325,16 @@ function initCaseKeyboardNav() {
       advanceCase(id, context, { requireUndone: false });
       return;
     }
-    if (verdictKind(d) === "review") {
+    if (!isReviewed(id) && verdictKind(d) === "review") {
       toast("ClearDraft didn't decide this one — choose an outcome below.");
       return;
     }
+    let undo;
     if (!isReviewed(id)) {
       setReview(id, "confirmed");
-      confirmToast(d);
+      undo = confirmToast(d, "Confirmed");
     }
-    advanceCase(id, context, { requireUndone: true });
+    advanceCase(id, context, { requireUndone: true, undoAction: undo });
   });
 }
 
@@ -1367,10 +1411,14 @@ function renderReviewsPanel(host) {
 
   let confirmed = 0, flagged = 0;
   const flaggedList = [];
+  const problemsFound = [];
   for (const id of ids) {
     const r = REVIEWS[id];
     if (r.verdict === "confirmed") confirmed++;
     else if (r.verdict === "flagged") { flagged++; flaggedList.push({ id, note: r.note }); }
+    else if (r.verdict === "done" && r.note && r.note.startsWith("problem:")) {
+      problemsFound.push({ id, note: r.note.slice("problem:".length).trim() });
+    }
   }
   const total = ids.length;
   const agreementDenom = confirmed + flagged;
@@ -1393,6 +1441,25 @@ function renderReviewsPanel(host) {
       list.append(li);
     }
     panel.append(list);
+  }
+
+  /* Escalations where the clerk actually found something wrong. These sit
+     outside the Agreement % on purpose — ClearDraft never rendered a
+     verdict on a needs-a-human case for the clerk to agree or disagree
+     with, so they are a record of what the queue turned up, not a miss. */
+  if (problemsFound.length) {
+    panel.append(el("h4", null, "Problems found on escalated cases"));
+    const problemList = el("ul", "reviews-flagged-list");
+    for (const f of problemsFound) {
+      const found = findRowById(f.id);
+      const li = el("li");
+      const a = el("a", null, found ? found.row.reference : f.id);
+      a.href = `#/case/${f.id}`;
+      li.append(a);
+      li.append(document.createTextNode(` — ${f.note}`));
+      problemList.append(li);
+    }
+    panel.append(problemList);
   }
   host.append(panel);
 }
