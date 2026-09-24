@@ -54,6 +54,19 @@ async function loadPairs() {
     PAIRS = [];
   }
   invalidateEvalCache();
+  renderLearnedShortcut();
+}
+
+/* Keeps the topbar "Marked as same" shortcut's count badge in sync with
+   PAIRS — hidden with zero pairs, otherwise showing the live count. */
+function renderLearnedShortcut() {
+  const link = document.getElementById("learned-shortcut");
+  const count = document.getElementById("learned-shortcut-count");
+  if (!link || !count) return;
+  const n = PAIRS.length;
+  count.textContent = String(n);
+  count.hidden = n === 0;
+  link.setAttribute("aria-label", n > 0 ? `Marked as same, ${n} pairs` : "Marked as same");
 }
 
 function pairById(id) { return PAIRS.find((p) => p.id === id) || null; }
@@ -2639,6 +2652,7 @@ function renderAccountChip() {
     wrap.hidden = true;
     closeAccountMenu();
   }
+  renderLearnedShortcut();
 }
 
 function closeAccountMenu() {
@@ -2694,6 +2708,7 @@ async function signOut() {
   MINE = loadMine();
   PAIRS = [];
   invalidateEvalCache();
+  renderLearnedShortcut();
   renderAccountChip();
   location.hash = "#/";
   route();
@@ -3159,6 +3174,11 @@ function route() {
     const route = a.dataset.route;
     const on = route === active || (route === "board" && active === "review");
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  }
+  const learnedShortcut = document.getElementById("learned-shortcut");
+  if (learnedShortcut) {
+    if (location.hash.startsWith("#/learned")) learnedShortcut.setAttribute("aria-current", "page");
+    else learnedShortcut.removeAttribute("aria-current");
   }
   renderAccountChip();
   window.scrollTo(0, 0);
