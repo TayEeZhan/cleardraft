@@ -15,11 +15,15 @@ Contents:
 - `emails.jsonl` — 30 synthetic triage emails with gold category/intent
   labels, deliberately including terse/non-native phrasing, quoted threads,
   and category-boundary hard cases.
-- `docs/pair1_SI.txt` / `pair1_BL.txt`, `pair2_SI.txt` / `pair2_BL.txt`,
-  `pair3_SI.txt` / `pair3_BL.txt` — three synthetic SI/BL document pairs
-  using unusual-but-realistic field labels not drawn from the system's own
-  alias list.
+- `docs/` contains 13 synthetic SI/BL pairs: three unfamiliar-label baseline
+  pairs plus adversarial cases for MT/KG and LB/KG conversion, unsupported
+  units, compound container quantities, suffix abbreviations, reordered party
+  names, country suffixes, punctuation, model field placement, and a real
+  side-by-side PDF box layout.
 - `docs/gold.json` — the true field values and genuine defects for each pair.
+- `multi_draft/` — one email with an SI and two candidate draft BLs. It is a
+  fixture for the explicit draft-selection policy: attachment order must not
+  silently decide which draft is checked.
 
 This data is entirely synthetic and fictional (companies, vessels, booking
 and BL numbers are made up) and is never scored by the organiser scorer.

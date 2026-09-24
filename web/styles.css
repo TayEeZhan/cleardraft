@@ -23,6 +23,12 @@
   --review-bg:  #EFEAF8;
   --marked:     #14395E;
   --marked-bg:  #E9EEF5;
+  /* Same weight, different unit — resolved (not a defect), but distinct from
+     an ordinary match so a clerk can still see why the numbers on the page
+     don't look identical. Calm teal: not the mismatch red, not the marked
+     navy, not the review purple. */
+  --converted:    #0E7C86;
+  --converted-bg: #E6F3F4;
 
   --display: 'Archivo', system-ui, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
@@ -292,6 +298,7 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 
 .f-label { font-size: 13px; color: var(--ink-2); display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
 .f-label-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.variance-hint { margin-top: 5px; color: var(--ink-2); font-size: 11px; font-weight: 500; line-height: 1.3; }
 .f-val {
   font-family: var(--mono); font-size: 13px; line-height: 1.45;
   word-break: break-word; display: flex; align-items: center;
@@ -331,6 +338,20 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; }
 .seam-row[data-state="unknown"] { background: var(--review-bg); }
 .seam-row[data-state="unknown"] .seam::before { background: repeating-linear-gradient(to bottom, var(--review) 0 3px, transparent 3px 7px); }
 .seam-row[data-state="unknown"] .f-label { color: var(--review); font-weight: 600; }
+
+/* Same weight, written in different units ("22 MT" vs "22,000 KG") — resolved,
+   not a defect, but worth a glance: calm, and deliberately not the mismatch
+   red. Grouped/ordered with ordinary matches (see seamTable in app.js); only
+   this row styling and the "units differ" chip set it apart. */
+.seam-row[data-state="converted"] { background: var(--converted-bg); }
+.seam-row[data-state="converted"] .seam::before { background: var(--converted); }
+.seam-row[data-state="converted"] .seam::after {
+  content: "\2248"; position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--mono); font-size: 14px; font-weight: 600;
+  color: var(--converted); background: var(--converted-bg); padding: 0 3px;
+}
+.seam-row[data-state="converted"] .f-label { color: var(--converted); font-weight: 600; }
 
 @media (prefers-reduced-motion: reduce) { .f-val { transition: none; } }
 
@@ -671,6 +692,31 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .upload-errors-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
 .upload-error-row { font-size: 12.5px; color: var(--ink-2); padding: 3px 0; }
 .upload-error-row b { color: var(--ink); font-weight: 600; }
+
+.document-chooser {
+  background: var(--surface); border: 1px solid var(--rule-2); border-left: 3px solid var(--review);
+  border-radius: var(--r); padding: 18px; box-shadow: var(--shadow);
+}
+.document-chooser-badge {
+  display: inline-block; margin-bottom: 8px; padding: 4px 8px; border-radius: 999px;
+  background: var(--review-bg); color: var(--review); font-family: var(--mono);
+  font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+}
+.document-chooser h3 { margin: 0 0 6px; font-size: 18px; }
+.document-chooser-help { margin: 0 0 16px; color: var(--ink-2); font-size: 13.5px; }
+.document-choice-group { border: 0; padding: 0; margin: 0 0 14px; }
+.document-choice-group legend { margin-bottom: 7px; font-weight: 600; font-size: 13px; color: var(--ink); }
+.document-choice {
+  display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 9px 10px;
+  border: 1px solid var(--rule); border-radius: var(--r); cursor: pointer;
+}
+.document-choice + .document-choice { margin-top: 6px; }
+.document-choice:hover { background: var(--surface-2); }
+.document-choice input { margin-top: 3px; accent-color: var(--marine); }
+.document-choice-copy { display: grid; gap: 2px; min-width: 0; }
+.document-choice-copy strong { overflow-wrap: anywhere; font-size: 13.5px; }
+.document-choice-copy small { color: var(--ink-3); font-family: var(--mono); font-size: 10.5px; }
+.document-chooser-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 
 .dataset-upload-summary {
   font-size: 13.5px; font-weight: 500; color: var(--match);

@@ -1,0 +1,8 @@
+DRAFT BILL OF LADING - VERSION 1
+Shipper: Atlas Paper Ltd
+Consignee: Blue Ocean Trading LLC
+Notify Party: Harbour Agents LLC
+Port of Loading: Port Klang, Malaysia
+Port of Discharge: Jebel Ali, UAE
+Container Count: 1 x 40HC
+Gross Weight: 22,000 KG

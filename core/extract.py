@@ -18,6 +18,7 @@ from __future__ import annotations
 import dataclasses
 
 from core.parsers import for_path
+from core.placement import locate_field_value
 from core.types import COMPARE_FIELDS, ExtractedDoc, FieldValue
 
 #: How much of the document to show the model. These are one-page documents;
@@ -49,20 +50,6 @@ def verify_against_source(value: str, text: str) -> bool:
     if not value or not text:
         return False
     return _normalise_ws(value) in _normalise_ws(text)
-
-
-def _locate(value: str, text: str) -> "tuple[int, str]":
-    """The first line containing `value`, so a model-read field still has proof.
-
-    The gate has already established the value is on the page; this records
-    WHERE, so the review screen can show the clerk the source line for a value
-    the model read - the values they should trust least deserve the most proof.
-    """
-    target = _normalise_ws(value)
-    for i, line in enumerate(text.splitlines(), 1):
-        if target in _normalise_ws(line):
-            return i, line.strip()
-    return 0, value  # spans a line break; the gate still matched the whole text
 
 
 def extract(path: str, *, use_model: bool = True) -> ExtractedDoc:
@@ -151,12 +138,17 @@ def _fill_missing_with_model(doc: ExtractedDoc, missing: list) -> ExtractedDoc:
             # invent a consignee. Counted, so the claim is measurable.
             STATS.gate_rejections += 1
             continue
-        line_no, raw_line = _locate(value, doc.text)
+        placement = locate_field_value(field, value, doc.text)
+        if placement is None:
+            # The text exists, but only under another known field (or across
+            # physical lines). Presence is not proof of correct assignment.
+            STATS.placement_rejections += 1
+            continue
         fields[field] = FieldValue(
             value=value,
-            raw=raw_line,
-            line_no=line_no,
-            label=f"(read by model: {field})",
+            raw=placement.raw,
+            line_no=placement.line_no,
+            label=placement.label,
             decided_by="model",
         )
 

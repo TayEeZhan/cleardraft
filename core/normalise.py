@@ -21,6 +21,7 @@ import re
 
 from core.aliases import is_blank
 from core.types import CompareField
+from core.units import to_kilograms
 
 #: entity punctuation that varies across renderers but never carries meaning:
 #: "MOORIM SP CO., LTD" vs "MOORIM SP CO LTD". Strip it everywhere, not just
@@ -65,11 +66,6 @@ _SIZE_BEFORE_MULTIPLIER = re.compile(r"[A-Za-z']\s*[xX×]\s*\d")
 #: plain noise ("2 X 40 *"), and treating it as one would misread that as a
 #: second group instead of trailing punctuation on the first.
 _COUNT_TERM = re.compile(r"(\d+)\s*[xX×]\s*(?=\d{2}\s*(?:'|FT|[A-Za-z]))")
-#: keep digits and both separators; strip units ("KG", "KGS", "MT") and spaces
-_WEIGHT_NOISE = re.compile(r"[^\d.,]")
-#: "21.577" is twenty-one thousand in European notation, not 21.577. Matches
-#: 1-3 leading digits followed by one or more dot-delimited groups of exactly 3.
-_DOT_THOUSANDS = re.compile(r"^\d{1,3}(?:\.\d{3})+$")
 
 
 def _as_text(value: object) -> "str | None":
@@ -201,29 +197,20 @@ def normalise_container_count(value: str) -> "int | None":
     return int(m.group())
 
 
-def normalise_weight(value: str) -> "int | None":
+def normalise_weight(value: object) -> "int | None":
     """gross_weight_kg.
 
-    Strip thousands separators and the KG/KGS suffix. The .xlsx renderer
-    stores a bare number, the others store "21,577 KG". Return an int.
+    Delegates to core.units.to_kilograms, which parses the numeric value and
+    unit together, converts supported units explicitly, and fails closed for
+    unsupported formats. A bare value remains kilograms because the .xlsx
+    renderer emits bare numeric cells.
 
-    A decimal point must survive stripping. Deleting it turns "21,577.00 KGS"
-    - a very common real-world rendering - into 2157700, which is a silent
-    100x error that guarantees a false mismatch. Weights here differ by at
-    least 500 kg when they genuinely differ, so rounding to the nearest
-    kilogram is safe and both sides get the same treatment.
+    A decimal point must survive parsing. Deleting it turns "21,577.00 KGS" - a very
+    common real-world rendering - into 2157700, a silent 100x error that guarantees a
+    false mismatch. Weights here differ by at least 500 kg when they genuinely differ,
+    so rounding to the nearest kilogram is safe and both sides get the same treatment.
     """
     text = _as_text(value)
     if text is None:
         return None
-    s = _WEIGHT_NOISE.sub("", text)
-    if not s:
-        return None
-    if _DOT_THOUSANDS.match(s):
-        # European notation: the dots are thousands separators, not decimals.
-        s = s.replace(".", "")
-    s = s.replace(",", "")          # comma is a thousands separator here
-    try:
-        return int(round(float(s)))
-    except (ValueError, OverflowError):
-        return None
+    return to_kilograms(text)

@@ -54,18 +54,22 @@ from api._dataset import router as dataset_router  # noqa: E402
 from api._equivalences import lookup_for, router as equivalences_router  # noqa: E402
 from api._ocr import router as ocr_router  # noqa: E402
 from api._navigate import router as navigate_router  # noqa: E402
+from api._feedback import router as feedback_router  # noqa: E402
 from core import parsers  # noqa: E402
 from core.classify import classify  # noqa: E402
 from core.compare import compare  # noqa: E402
 from core.decide import decide  # noqa: E402
 from core.extract import extract  # noqa: E402
-from core.pipeline import split_si_bl  # noqa: E402
+from core.pipeline import candidate_docs, split_si_bl  # noqa: E402
 from core.reply import FIELD_LABELS, _reference, draft_reply  # noqa: E402
 from core.types import Classification, Email  # noqa: E402
+from core.units import describe_unit_difference, parse_weight  # noqa: E402
+from core.variance import comparison_variance  # noqa: E402
 
 app = FastAPI()
 app.include_router(accounts_router)
 app.include_router(equivalences_router)
+app.include_router(feedback_router)
 app.include_router(dataset_router)
 app.include_router(ocr_router)
 app.include_router(navigate_router)
@@ -164,6 +168,22 @@ def _fv(field_value, source: str) -> "dict | None":
     }
 
 
+def _unit_fields(c) -> dict:
+    """{"unit_note", "unit_kg"} for a gross_weight_kg comparison whose two
+    sides are the same weight written in different units - e.g. "22 MT" vs
+    "22,000 KG" -> {"unit_note": "MT vs KG", "unit_kg": 22000}. Both None for
+    every other field, or when either side is missing. Never raises - mirrors
+    core.units.describe_unit_difference/parse_weight's own no-raise contract.
+    """
+    if c.field != "gross_weight_kg" or c.si is None or c.bl is None:
+        return {"unit_note": None, "unit_kg": None}
+    unit_note = describe_unit_difference(c.si.value, c.bl.value)
+    if unit_note is None:
+        return {"unit_note": None, "unit_kg": None}
+    w = parse_weight(c.si.value)
+    return {"unit_note": unit_note, "unit_kg": (w.kg if w is not None else None)}
+
+
 def _doc_info(doc, name: str) -> dict:
     return {
         "name": name,
@@ -192,6 +212,7 @@ def _stats_snapshot() -> dict:
     return {
         "calls": STATS.calls,
         "gate_rejections": STATS.gate_rejections,
+        "placement_rejections": STATS.placement_rejections,
         "input_tokens": STATS.input_tokens,
         "output_tokens": STATS.output_tokens,
     }
@@ -284,11 +305,13 @@ async def check(
             "label": FIELD_LABELS.get(c.field, c.field),
             "matched": c.matched,
             "undecidable": c.undecidable,
+            "variance_reason": comparison_variance(c),
             "learned": c.matched and c.si_norm != c.bl_norm,
             "si_norm": c.si_norm,
             "bl_norm": c.bl_norm,
             "si": _fv(c.si, si.filename),
             "bl": _fv(c.bl, bl.filename),
+            **_unit_fields(c),
         }
         for c in comparisons
     ]
@@ -316,7 +339,13 @@ async def check(
     return payload
 
 
-def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict | JSONResponse":
+def _process_eml_bytes(
+    data: bytes,
+    upload_name: str,
+    known_equal=None,
+    selected_si: str = "",
+    selected_bl: str = "",
+) -> "dict | JSONResponse":
     """The one pipeline: raw .eml bytes in, {board, detail, model_delta} out.
 
     Shared by both `/api/process-email` request shapes - an uploaded .eml
@@ -328,6 +357,10 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
     `known_equal`, when given, is api._equivalences.lookup_for(request)'s
     result - the signed-in caller's learned pairs, or None when signed out
     or accounts are unavailable. Passed straight through to compare().
+
+    `selected_si` and `selected_bl` are stable candidate IDs returned by a
+    previous selection-required response. Multiple candidates are never
+    resolved from attachment order on this interactive path.
 
     Nothing is written anywhere except a per-request tempfile.TemporaryDirectory,
     which is removed before this function returns. No email content is logged.
@@ -384,7 +417,55 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
         if classification.category == "BL_COMPARISON":
             docs = [extract(os.path.join(tmp_dir, name)) for name in saved_names]
 
-        si, bl = split_si_bl(docs)
+        sis, bls = candidate_docs(docs)
+
+        def _candidate(doc) -> dict:
+            saved = os.path.basename(doc.path)
+            return {
+                "id": saved,
+                "name": original_by_saved.get(saved, saved),
+                "kind": doc.kind,
+                "readable": doc.readable,
+                "error": doc.error,
+            }
+
+        document_candidates = {
+            "si": [_candidate(doc) for doc in sis],
+            "bl": [_candidate(doc) for doc in bls],
+        }
+        has_selection = bool(selected_si or selected_bl)
+        selection_is_needed = len(sis) > 1 or len(bls) > 1
+
+        if has_selection:
+            if not selected_si or not selected_bl:
+                return _error(
+                    400,
+                    "invalid_document_selection",
+                    "Choose one Shipping Instruction and one draft Bill of Lading.",
+                )
+            si = next((doc for doc in sis if os.path.basename(doc.path) == selected_si), None)
+            bl = next((doc for doc in bls if os.path.basename(doc.path) == selected_bl), None)
+            if si is None or bl is None:
+                return _error(
+                    400,
+                    "invalid_document_selection",
+                    "The selected SI or draft BL is not a candidate from this email.",
+                )
+        elif selection_is_needed:
+            after = _stats_snapshot()
+            model_delta = {key: after[key] - before[key] for key in before}
+            return {
+                "selection_required": True,
+                "document_candidates": document_candidates,
+                "email": {
+                    "subject": email_obj.subject,
+                    "from": email_obj.sender,
+                    "filename": upload_name,
+                },
+                "model_delta": model_delta,
+            }
+        else:
+            si, bl = split_si_bl(docs)
 
         comparisons = ()
         if si is not None and bl is not None and si.readable and bl.readable:
@@ -406,11 +487,13 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
                 "label": FIELD_LABELS.get(c.field, c.field),
                 "matched": c.matched,
                 "undecidable": c.undecidable,
+                "variance_reason": comparison_variance(c),
                 "learned": c.matched and c.si_norm != c.bl_norm,
                 "si_norm": c.si_norm,
                 "bl_norm": c.bl_norm,
                 "si": _fv(c.si, _source_name(si)),
                 "bl": _fv(c.bl, _source_name(bl)),
+                **_unit_fields(c),
             }
             for c in comparisons
         ]
@@ -445,6 +528,11 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
             "decided_by": decision.decided_by,
             "defect_fields": list(decision.defect_fields),
             "documents": {"si": _export_doc(si, _source_name(si)), "bl": _export_doc(bl, _source_name(bl))},
+            "selected_documents": {
+                "si": os.path.basename(si.path) if si is not None else None,
+                "bl": os.path.basename(bl.path) if bl is not None else None,
+            },
+            "document_candidates": document_candidates,
             "comparisons": comparison_rows,
             "reply_draft": reply_draft,
             "recheck": None,
@@ -458,7 +546,12 @@ def _process_eml_bytes(data: bytes, upload_name: str, known_equal=None) -> "dict
     after = _stats_snapshot()
     model_delta = {key: after[key] - before[key] for key in before}
 
-    return {"board": board, "detail": detail, "model_delta": model_delta}
+    return {
+        "selection_required": False,
+        "board": board,
+        "detail": detail,
+        "model_delta": model_delta,
+    }
 
 
 @app.post("/api/process-email")
@@ -469,6 +562,8 @@ async def process_email(
     body: "str | None" = Form(None),
     sender: str = Form(""),
     files: "list[UploadFile]" = File(default=[]),
+    selected_si: str = Form(""),
+    selected_bl: str = Form(""),
 ):
     """Upload-your-own-email demo path, in two request shapes:
 
@@ -544,9 +639,25 @@ async def process_email(
         upload_name = "Pasted email"
 
     known_equal = lookup_for(request)
-    result = _process_eml_bytes(data, upload_name, known_equal=known_equal)
+    result = _process_eml_bytes(
+        data,
+        upload_name,
+        known_equal=known_equal,
+        selected_si=selected_si,
+        selected_bl=selected_bl,
+    )
     if isinstance(result, JSONResponse):
         return result
+
+    if result.get("selection_required"):
+        return {
+            "selection_required": True,
+            "document_candidates": result["document_candidates"],
+            "email": result["email"],
+            "model": {"available": model_available(), **result["model_delta"]},
+            "seconds": round(time.time() - started, 2),
+            "saved": False,
+        }
 
     board, detail, model_delta = result["board"], result["detail"], result["model_delta"]
 
@@ -566,6 +677,7 @@ async def process_email(
             save_error = "save_failed"
 
     payload = {
+        "selection_required": False,
         "board": board,
         "detail": detail,
         "model": {"available": model_available(), **model_delta},
