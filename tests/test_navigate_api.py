@@ -61,6 +61,21 @@ def test_empty_query_is_400(client):
     assert resp.json()["error"] == "empty_query"
 
 
+def test_non_string_query_is_400_not_422(client):
+    # `query` is typed loosely (Any) precisely so a wrong-typed value gets
+    # this module's own plain {error, detail} 400, not FastAPI/pydantic's
+    # default 422 for a failed field-type validation.
+    resp = _post(client, 12345)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_query"
+
+
+def test_missing_query_field_is_400_not_422(client):
+    resp = client.post("/api/navigate", json={})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_query"
+
+
 # ---------------------------------------------------------------------------
 # Model off / unavailable -> 503
 # ---------------------------------------------------------------------------
@@ -79,6 +94,30 @@ def test_model_available_but_call_fails_is_503(client, model_on, monkeypatch):
     resp = _post(client, "download report")
     assert resp.status_code == 503
     assert resp.json()["error"] == "model_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# The model call runs off the event loop, via starlette's run_in_threadpool -
+# same discipline as api/_dataset.py's own blocking pipeline run.
+# ---------------------------------------------------------------------------
+def test_model_call_goes_through_call_model_via_threadpool(client, model_on, monkeypatch):
+    calls = []
+
+    def fake_call_model(query, budget):
+        calls.append((query, budget))
+        return {"id": "accuracy", "reason": "matches the accuracy page"}
+
+    monkeypatch.setattr(navigate_module, "_call_model", fake_call_model)
+    resp = _post(client, "how good is this thing")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "accuracy"
+
+    # The route calls _call_model (never complete_json directly) with the
+    # trimmed query and a fresh [attempts_left, deadline] budget list.
+    assert len(calls) == 1
+    called_query, budget = calls[0]
+    assert called_query == "how good is this thing"
+    assert budget[0] == navigate_module._MODEL_ATTEMPT_BUDGET
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +194,15 @@ def test_client_and_server_destination_ids_match():
     assert client_ids == navigate_module._VALID_IDS
     assert len(client_ids) >= 25  # spec: ~25-35 entries
     assert len(client_ids) <= 35
+
+
+def test_reply_carrier_destination_is_in_both_lists():
+    with open(DESTINATIONS_PATH, encoding="utf-8") as fh:
+        client_destinations = json.load(fh)
+    client_ids = {d["id"] for d in client_destinations}
+
+    assert "reply-carrier" in client_ids
+    assert "reply-carrier" in navigate_module._VALID_IDS
 
 
 def test_every_destination_has_id_title_and_hint():

@@ -104,10 +104,28 @@ function boardHasContent() {
   return Boolean(normal && !normal.hidden);
 }
 
+// Reuses the page's own shared #toast element (see web/index.html and
+// styles.css's .toast rules) rather than reimplementing a second toast, and
+// rather than reaching into app.js's own private toast() — a plain
+// dataset-attribute contract already public to any script on the page.
+let sourceSwitchToastTimer;
+function notifySourceSwitch() {
+  const toastEl = $id("toast");
+  if (!toastEl) return;
+  toastEl.replaceChildren(document.createTextNode("Your mail is empty, so showing the sample inbox."));
+  toastEl.classList.remove("toast-has-action");
+  toastEl.dataset.show = "true";
+  clearTimeout(sourceSwitchToastTimer);
+  sourceSwitchToastTimer = setTimeout(() => { toastEl.dataset.show = "false"; }, 3200);
+}
+
 function ensureBoardContent() {
   if (boardHasContent()) return;
   const sampleBtn = $id("switch-sample");
-  if (sampleBtn) sampleBtn.click();
+  if (sampleBtn) {
+    sampleBtn.click();
+    notifySourceSwitch();
+  }
 }
 
 async function onBoardWithContent() {
@@ -339,6 +357,12 @@ const ACTIONS = {
   },
 };
 
+// "Reply to the carrier" is the same first step as "Start" — the queue's
+// next case is where a reply gets drafted and sent — so it reuses the same
+// action rather than duplicating it. Assigned after the object literal
+// closes, since ACTIONS can't reference itself from inside its own literal.
+ACTIONS["reply-carrier"] = ACTIONS.start;
+
 /* ── matching: deterministic, local, no network ───────────────────────
    Score = an exact/whole-phrase bonus, plus per-field token overlap
    (title weighted highest, then keywords, then hint), where each token
@@ -496,15 +520,29 @@ function buildDialog() {
     attrs: {
       type: "text", id: "nav-input", role: "combobox", "aria-expanded": "false",
       "aria-controls": "nav-listbox", "aria-autocomplete": "list", "aria-haspopup": "listbox",
+      "aria-labelledby": titleId,
       autocomplete: "off", spellcheck: "false", maxlength: "200",
       placeholder: "Try “download report”, “wrong ones”, “upload company inbox”…",
     },
   });
-  fieldWrap.append(icon, inputEl);
+  // Esc closes the dialog, but a touch keyboard has no Esc key and a
+  // full-screen phone dialog (see navigator.css's <=640px rule) leaves no
+  // visible backdrop to tap either — this button is the only way to close
+  // on a phone, so it is always present, not just there for mouse users.
+  const closeBtn = make("button", {
+    class: "nav-close-btn",
+    attrs: { type: "button", "aria-label": "Close" },
+  });
+  closeBtn.innerHTML = CLOSE_ICON_SVG; // static, trusted markup — never user text
+  closeBtn.addEventListener("click", () => closeDialog({ returnFocus: true }));
+  fieldWrap.append(icon, inputEl, closeBtn);
 
   listEl = make("ul", { class: "nav-list", attrs: { id: "nav-listbox", role: "listbox", "aria-label": "Destinations" } });
   statusEl = make("div", { class: "nav-status", attrs: { "aria-live": "polite" } });
 
+  // Hidden on a touch device (no physical arrow/Enter/Esc keys to describe)
+  // via CSS's (hover: none) — the mouse/keyboard affordances below don't
+  // apply there, and the Close button above covers closing either way.
   const hint = make("div", { class: "nav-hint" });
   const hintParts = [
     ["↑↓", " to move, "],
@@ -522,9 +560,21 @@ function buildDialog() {
   backdropEl.addEventListener("mousedown", (e) => {
     if (e.target === backdropEl) closeDialog({ returnFocus: true });
   });
-  dialogEl.addEventListener("keydown", onDialogKeydown);
+  // A mousedown on the dialog's own padding, the status line or the key
+  // hint (nothing that is itself focusable) would otherwise blur the input
+  // and hand focus to <body> — and from there, a "d"/"n"/"/" keypress
+  // would reach app.js's own global shortcut listeners as if this dialog
+  // were not even open. Blocking the default here keeps focus exactly
+  // where it was; a real control (the input, a result row, Close) is
+  // always let through untouched.
+  dialogEl.addEventListener("mousedown", (e) => {
+    if (!e.target.closest("input, button, .nav-row")) e.preventDefault();
+  });
   inputEl.addEventListener("input", onInput);
 }
+
+const CLOSE_ICON_SVG =
+  '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="5" y1="5" x2="15" y2="15"/><line x1="15" y1="5" x2="5" y2="15"/></svg>';
 
 const SEARCH_ICON_SVG =
   '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8.6" cy="8.6" r="5.6"/><line x1="17" y1="17" x2="12.8" y2="12.8"/></svg>';
@@ -541,6 +591,16 @@ function openDialog(trigger) {
   statusEl.textContent = "";
   renderResults([]);
   document.body.classList.add("nav-open");
+  // Capture phase, not bubble: a keydown fires on whatever currently has
+  // focus and bubbles from there. If focus has ever landed on <body> (a
+  // click on the dialog's own padding used to do exactly that, before the
+  // mousedown guard above), a bubble-phase listener on the dialog itself
+  // never sees the event at all, and it reaches app.js's own global "d" /
+  // "n" / "/" shortcut listeners as if this dialog were not open. Capture
+  // runs first, on every keydown reaching the document regardless of what
+  // has focus, and stopPropagation() there stops it from ever reaching
+  // those bubble-phase listeners.
+  document.addEventListener("keydown", onCaptureKeydown, true);
   // Focus after the element is visible, not before — some browsers refuse
   // to focus a node whose ancestor was [hidden] a frame ago.
   requestAnimationFrame(() => inputEl.focus());
@@ -550,9 +610,15 @@ function closeDialog({ returnFocus }) {
   if (!isOpen()) return;
   backdropEl.hidden = true;
   document.body.classList.remove("nav-open");
+  document.removeEventListener("keydown", onCaptureKeydown, true);
   clearTimeout(debounceTimer);
   aiRequestSeq++; // orphan any in-flight "ask the AI" request
   if (returnFocus && openerEl && typeof openerEl.focus === "function") openerEl.focus();
+}
+
+function onCaptureKeydown(e) {
+  onDialogKeydown(e);
+  e.stopPropagation();
 }
 
 function onDialogKeydown(e) {
@@ -660,12 +726,26 @@ function runSearch(rawQuery) {
 
   if (mySeq !== searchSeq) return; // a newer keystroke already superseded this
   renderResults(results);
+  // aria-live announcement of the result count — the list itself isn't
+  // polite/assertive, so a screen reader says nothing about it changing
+  // unless something with aria-live does.
+  statusEl.textContent = localHits.length
+    ? `${localHits.length} result${localHits.length === 1 ? "" : "s"}`
+    : "No matches — press Enter to ask ClearDraft AI.";
 }
 
 /* ── choosing a result: close, move there smoothly, arrive ───────────── */
+let aiInFlight = false;
+
 async function choose(result) {
   if (result.kind === "ai") {
-    await askAi(result.query);
+    if (aiInFlight) return; // a request is already running — ignore a repeat Enter/click
+    aiInFlight = true;
+    try {
+      await askAi(result.query);
+    } finally {
+      aiInFlight = false;
+    }
     return;
   }
   closeDialog({ returnFocus: false }); // focus is about to land on the destination itself, not the opener

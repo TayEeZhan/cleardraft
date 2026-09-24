@@ -20,24 +20,28 @@ every non-underscore file in `api/` becomes its own Vercel function.
 Routes:
     POST /api/navigate  - {"query": str} ->
         200 {"id": <one destination id> | null, "reason": str}
-        400 query_too_long / empty_query
+        400 query_too_long / empty_query / invalid_query (not a string)
         503 model_unavailable (model tier off, no key, or the call failed)
 
 Model budget: at most ONE attempt and 8 real seconds for this request - a
 navigation aid must fail fast, never hang a clerk's search box. Enforced the
 same way api/_dataset.py enforces its own request budget: a
 [attempts_left, deadline] list set into adapters.model._BUDGET for the
-duration of this call only.
+duration of this call only - and, same as api/_dataset.py's own model call,
+run on a worker thread via starlette's run_in_threadpool, so a slow model
+call never blocks the asyncio event loop the rest of the API shares.
 """
 from __future__ import annotations
 
 import json
 import os
 import time
+from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 import adapters.model as model_mod
 from adapters.model import ModelUnavailable, available as model_available, complete_json
@@ -82,7 +86,12 @@ _VALID_IDS = {d["id"] for d in _DESTINATIONS}
 
 
 class NavigateRequest(BaseModel):
-    query: str
+    # Deliberately untyped (Any, not str): a non-string query must answer
+    # the same plain {error, detail} 400 every other bad input here gets,
+    # not FastAPI/pydantic's default 422 - checked explicitly in navigate()
+    # below (a typed `query: str` field would make pydantic itself 422 a
+    # non-string value before this module ever saw the request).
+    query: Any = None
 
 
 def _error(status_code: int, error: str, detail: str) -> JSONResponse:
@@ -101,8 +110,33 @@ def _prompt(query: str) -> str:
     )
 
 
+def _call_model(query: str, budget: list) -> dict:
+    """The blocking part of the request: one model call for a destination id.
+
+    Runs on a worker thread (see the route below, via starlette's
+    run_in_threadpool) so a slow model call never blocks the asyncio event
+    loop the rest of the API shares - same discipline as api/_dataset.py's
+    _run_pipeline.
+
+    `budget` is set into adapters.model._BUDGET for the DURATION OF THIS
+    CALL ONLY, on THIS thread's copy of the context - contextvars set here
+    are local to this thread's context, not the caller's, so no explicit
+    reset is needed once this function returns and the thread is done with
+    the context run_in_threadpool built for it.
+    """
+    model_mod._BUDGET.set(budget)
+    return complete_json(
+        _prompt(query),
+        schema_hint='{"id": "<one destination id from the list, or null>", "reason": "<short, plain-English, <=140 chars>"}',
+        max_tokens=200,
+    )
+
+
 @router.post("/api/navigate")
 async def navigate(payload: NavigateRequest):
+    if not isinstance(payload.query, str):
+        return _error(400, "invalid_query", "Query must be a string.")
+
     if len(payload.query) > _MAX_QUERY_CHARS:
         return _error(400, "query_too_long", f"Query must be {_MAX_QUERY_CHARS} characters or fewer.")
 
@@ -114,17 +148,10 @@ async def navigate(payload: NavigateRequest):
         return _error(503, "model_unavailable", "AI help is off right now.")
 
     budget = [_MODEL_ATTEMPT_BUDGET, time.monotonic() + _MODEL_TIME_BUDGET_SECONDS]
-    token = model_mod._BUDGET.set(budget)
     try:
-        result = complete_json(
-            _prompt(query),
-            schema_hint='{"id": "<one destination id from the list, or null>", "reason": "<short, plain-English, <=140 chars>"}',
-            max_tokens=200,
-        )
+        result = await run_in_threadpool(_call_model, query, budget)
     except ModelUnavailable:
         return _error(503, "model_unavailable", "AI help is off right now.")
-    finally:
-        model_mod._BUDGET.reset(token)
 
     chosen = result.get("id") if isinstance(result, dict) else None
     reason = result.get("reason") if isinstance(result, dict) else None

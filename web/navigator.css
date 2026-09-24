@@ -64,6 +64,20 @@
 }
 .nav-input::placeholder { color: var(--ink-3); }
 
+/* Always present, not just on phones: Esc has no equivalent on a touch
+   keyboard, and the full-width phone dialog (below) leaves no backdrop to
+   tap either — this is the only reliable close control there. */
+.nav-close-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; margin: -10px -8px -10px 0;
+  color: var(--ink-3); background: none; border: 0; border-radius: var(--r);
+  cursor: pointer;
+  transition-property: background-color, color;
+  transition-duration: 120ms; transition-timing-function: ease-out;
+}
+.nav-close-btn:hover { color: var(--ink); background: var(--surface-2); }
+@media (prefers-reduced-motion: reduce) { .nav-close-btn { transition: none; } }
+
 .nav-list {
   list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1 1 auto;
   min-height: 0;
@@ -103,6 +117,14 @@
   font-family: var(--mono); font-size: 10.5px; color: var(--ink-2);
   background: var(--surface); border: 1px solid var(--rule-2); border-radius: 4px;
   padding: 1px 5px; line-height: 1.4;
+}
+
+/* A touch device has no arrow keys, Enter key or Esc key to describe —
+   (hover: none) is the standard way to detect "primarily touch", distinct
+   from a narrow viewport (a touch laptop can still hover; a small desktop
+   window still has real keys). The Close button covers closing either way. */
+@media (hover: none) {
+  .nav-hint { display: none; }
 }
 
 @media (max-width: 640px) {

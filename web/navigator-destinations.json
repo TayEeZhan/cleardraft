@@ -3,7 +3,7 @@
     "id": "home",
     "title": "Home",
     "hint": "The main menu — see a real example, or jump into your own mail.",
-    "keywords": ["home", "main menu", "start page", "main screen", "front page"]
+    "keywords": ["home", "main menu", "start page", "main screen", "front page", "help", "how does this work", "guide"]
   },
   {
     "id": "inbox",
@@ -33,7 +33,7 @@
     "id": "learned",
     "title": "Marked as same",
     "hint": "Exact wordings you've told ClearDraft are the same, so they stop being flagged.",
-    "keywords": ["marked as same", "learned pairs", "equivalences", "undo a mark", "taught pairs", "undo"]
+    "keywords": ["marked as same", "learned pairs", "equivalences", "undo a mark", "taught pairs"]
   },
   {
     "id": "tab-mismatch",
@@ -63,7 +63,7 @@
     "id": "intake-drop",
     "title": "Drop .eml files",
     "hint": "Add emails saved from Gmail or Outlook as .eml files.",
-    "keywords": ["drop eml", "eml files", "upload email", "add email file", "gmail", "outlook", "drag and drop", "drop files"]
+    "keywords": ["drop eml", "eml files", "upload email", "add email file", "outlook", "drag and drop", "drop files"]
   },
   {
     "id": "intake-paste",
@@ -87,7 +87,13 @@
     "id": "start",
     "title": "Start",
     "hint": "Jump straight into the next case that needs you.",
-    "keywords": ["start", "begin", "get started", "next case", "start reviewing", "send reply", "reply", "start the queue"]
+    "keywords": ["start", "begin", "get started", "next case", "start reviewing", "start the queue"]
+  },
+  {
+    "id": "reply-carrier",
+    "title": "Reply to the carrier",
+    "hint": "Opens the first discrepancy — then use Open in Gmail.",
+    "keywords": ["reply to carrier", "email the carrier", "tell the carrier", "send email", "send reply", "gmail", "open in gmail", "fix value", "correct value"]
   },
   {
     "id": "search-inbox",
