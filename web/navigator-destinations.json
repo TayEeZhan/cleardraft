@@ -1,0 +1,182 @@
+[
+  {
+    "id": "home",
+    "title": "Home",
+    "hint": "The main menu — see a real example, or jump into your own mail.",
+    "keywords": ["home", "main menu", "start page", "main screen", "front page"]
+  },
+  {
+    "id": "inbox",
+    "title": "Inbox",
+    "hint": "Every email, sorted into Discrepancy found, Needs a human, Cleared and Other mail.",
+    "keywords": ["inbox", "board", "mail", "messages", "emails", "all emails", "my inbox"]
+  },
+  {
+    "id": "check",
+    "title": "Check a pair",
+    "hint": "Upload a Shipping Instruction and a draft Bill of Lading to check them against each other.",
+    "keywords": ["check a pair", "check documents", "compare documents", "si and bl", "upload files", "new check", "compare si bl"]
+  },
+  {
+    "id": "accuracy",
+    "title": "Accuracy",
+    "hint": "How often ClearDraft gets it right, measured on every run.",
+    "keywords": ["accuracy", "how accurate", "how accurate is it", "how good is it", "stats", "statistics", "performance", "score"]
+  },
+  {
+    "id": "account",
+    "title": "Sign in / your account",
+    "hint": "Sign in or create an account so your mail is saved.",
+    "keywords": ["sign in", "log in", "login", "create account", "register", "my account", "account settings"]
+  },
+  {
+    "id": "learned",
+    "title": "Marked as same",
+    "hint": "Exact wordings you've told ClearDraft are the same, so they stop being flagged.",
+    "keywords": ["marked as same", "learned pairs", "equivalences", "undo a mark", "taught pairs", "undo"]
+  },
+  {
+    "id": "tab-mismatch",
+    "title": "Discrepancy found",
+    "hint": "Emails where the draft Bill of Lading doesn't match the Shipping Instruction.",
+    "keywords": ["discrepancy", "discrepancies", "wrong ones", "where are the wrong ones", "errors", "mismatches", "mistakes", "problems"]
+  },
+  {
+    "id": "tab-needs-review",
+    "title": "Needs a human",
+    "hint": "Emails ClearDraft wasn't sure enough to decide on its own.",
+    "keywords": ["needs a human", "needs review", "unsure", "not sure", "manual review", "review queue"]
+  },
+  {
+    "id": "tab-cleared",
+    "title": "Cleared",
+    "hint": "Emails whose draft matched the Shipping Instruction — nothing wrong.",
+    "keywords": ["cleared", "matched", "all good", "no problems", "clean", "ok ones"]
+  },
+  {
+    "id": "tab-other",
+    "title": "Other mail",
+    "hint": "Mail that wasn't a Shipping Instruction / Bill of Lading check at all.",
+    "keywords": ["other mail", "not a check", "everything else", "misc mail"]
+  },
+  {
+    "id": "intake-drop",
+    "title": "Drop .eml files",
+    "hint": "Add emails saved from Gmail or Outlook as .eml files.",
+    "keywords": ["drop eml", "eml files", "upload email", "add email file", "gmail", "outlook", "drag and drop", "drop files"]
+  },
+  {
+    "id": "intake-paste",
+    "title": "Paste an email",
+    "hint": "Type or paste an email's text directly, no saved file needed.",
+    "keywords": ["paste email", "paste text", "type an email", "copy paste email"]
+  },
+  {
+    "id": "intake-dataset",
+    "title": "Upload a dataset (.zip)",
+    "hint": "Upload your company's whole inbox as one .zip file, processed live.",
+    "keywords": ["upload dataset", "upload zip", "upload company inbox", "upload your company's inbox", "company inbox zip", "bulk upload", "whole inbox", "zip file", "dataset upload"]
+  },
+  {
+    "id": "scan",
+    "title": "Scan a photo",
+    "hint": "Scan a photo of a paper document with your camera.",
+    "keywords": ["scan", "scan a photo", "photo", "camera", "take a picture", "picture", "photograph"]
+  },
+  {
+    "id": "start",
+    "title": "Start",
+    "hint": "Jump straight into the next case that needs you.",
+    "keywords": ["start", "begin", "get started", "next case", "start reviewing", "send reply", "reply", "start the queue"]
+  },
+  {
+    "id": "search-inbox",
+    "title": "Search the inbox",
+    "hint": "Search by reference, subject, sender or field.",
+    "keywords": ["search", "search inbox", "find email", "find a case", "search reference"]
+  },
+  {
+    "id": "export",
+    "title": "Export",
+    "hint": "Download a report or submission file from the inbox.",
+    "keywords": ["export", "download", "reports menu"]
+  },
+  {
+    "id": "export-discrepancy",
+    "title": "Discrepancy report (CSV)",
+    "hint": "Download a CSV of just the discrepancies.",
+    "keywords": ["download report", "discrepancy report", "csv report", "export discrepancies", "download csv", "discrepancy csv"]
+  },
+  {
+    "id": "export-full",
+    "title": "Full results (CSV)",
+    "hint": "Download a CSV of every checked email.",
+    "keywords": ["full results", "all results csv", "export everything", "download all", "full csv"]
+  },
+  {
+    "id": "export-submission",
+    "title": "Submission file (JSON)",
+    "hint": "Download the JSON submission file.",
+    "keywords": ["submission file", "json export", "download json", "submission json"]
+  },
+  {
+    "id": "source-sample",
+    "title": "Sample company inbox",
+    "hint": "Browse the shared sample inbox of 520 example messages — not your own mail.",
+    "keywords": ["sample inbox", "demo inbox", "shared inbox", "example emails", "520 messages", "browse sample"]
+  },
+  {
+    "id": "source-mine",
+    "title": "Your mail",
+    "hint": "Your own emails, processed live by ClearDraft.",
+    "keywords": ["your mail", "my mail", "my emails", "own emails"]
+  },
+  {
+    "id": "try-sample-emails",
+    "title": "Try 6 sample emails",
+    "hint": "Add 6 example emails to Your mail to try the pipeline.",
+    "keywords": ["try sample emails", "try samples", "demo emails", "6 sample emails"]
+  },
+  {
+    "id": "check-use-sample",
+    "title": "Use a sample pair",
+    "hint": "No files? Try a sample Shipping Instruction / Bill of Lading pair.",
+    "keywords": ["use a sample pair", "sample documents", "no files", "try a sample"]
+  },
+  {
+    "id": "check-sample-discrepancies",
+    "title": "Sample with discrepancies",
+    "hint": "A sample pair with a couple of wrong fields, on the Check a pair page.",
+    "keywords": ["sample with discrepancies", "sample errors", "demo discrepancy"]
+  },
+  {
+    "id": "check-sample-inbox",
+    "title": "Sample from the inbox",
+    "hint": "A sample pair pulled from the sample inbox, on the Check a pair page.",
+    "keywords": ["sample from inbox", "inbox sample pair"]
+  },
+  {
+    "id": "add-emails",
+    "title": "Add emails",
+    "hint": "Open the panel to add more of your own emails.",
+    "keywords": ["add emails", "add more mail", "add another email"]
+  },
+  {
+    "id": "clear-your-mail",
+    "title": "Clear your mail",
+    "hint": "Delete every email you've added to Your mail.",
+    "keywords": ["clear your mail", "delete my mail", "remove all my emails", "clear mail"]
+  },
+  {
+    "id": "remove-uploaded-dataset",
+    "title": "Remove uploaded dataset",
+    "hint": "Remove the dataset you uploaded.",
+    "keywords": ["remove uploaded dataset", "delete dataset", "remove zip"]
+  },
+  {
+    "id": "sign-out",
+    "title": "Sign out",
+    "hint": "Sign out of your account.",
+    "keywords": ["sign out", "log out", "logout"]
+  }
+]
