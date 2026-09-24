@@ -875,16 +875,44 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .reply-textarea:focus-visible { outline: 2px solid var(--marine); outline-offset: -2px; }
 
 /* ── Done — next case ───────────────────────────────────────── */
+/* Pinned to the bottom of the viewport on the case page, so it is reachable
+   without scrolling past a long reply box (the whole reason it can be a
+   long way down the page). Sticky, not fixed — once the page finishes
+   scrolling it settles back into the normal flow, so it never floats over
+   content that comes after it. safe-area-inset-bottom keeps the buttons
+   clear of a phone's home-bar. */
 .done-bar {
+  position: sticky; bottom: 0; z-index: 20;
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
-  gap: 12px 20px; margin-top: 24px; padding: 16px; background: var(--surface);
+  gap: 12px 20px; margin-top: 24px;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  background: var(--surface);
   border: 1px solid var(--rule); border-radius: var(--r);
+  box-shadow: 0 -4px 14px rgba(13, 21, 32, .06);
 }
 .done-bar-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .done-bar-actions .link-btn { display: inline-flex; align-items: center; min-height: 44px; }
 .done-bar-pos { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
 .done-bar-hint { display: none; font-size: 12px; color: var(--ink-3); }
 @media (min-width: 861px) { .done-bar-hint { display: inline; } }
+
+/* The case page's own bottom padding, so the sticky bar above never
+   permanently covers the last real content once the page is scrolled all
+   the way down. */
+#view-review { padding-bottom: 24px; }
+
+/* A toast fixed at its usual 28px offset would sit underneath (or behind)
+   the sticky review bar on the case page — lift it clear whenever that bar
+   is on screen. The bar is taller on narrow phones (buttons stack in a
+   column, see the 520px rule below), so it needs more clearance there. */
+body:has(.done-bar) .toast {
+  bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 520px) {
+  body:has(.done-bar) .toast {
+    bottom: calc(210px + env(safe-area-inset-bottom, 0px));
+  }
+}
 
 .chip-done { background: var(--surface-2); color: var(--ink-3); }
 .case.case-done { opacity: .6; }

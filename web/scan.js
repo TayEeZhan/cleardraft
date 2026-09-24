@@ -111,7 +111,7 @@
       return { ok: false, reason: "Could not reach the server. Type the text yourself." };
     }
     if (r.status === 404 || r.status === 405 || r.status === 501) {
-      return { ok: false, reason: "This preview has no live backend. Type the text yourself." };
+      return { ok: false, reason: "This preview isn't connected. Type the text yourself." };
     }
     const ct = r.headers.get("content-type") || "";
     let body = null;
@@ -478,7 +478,7 @@
     const body = emailText.length ? emailText.join("\n\n") : "Please compare the attached SI and draft BL.";
 
     if (typeof window.clearDraftSubmitScan !== "function") {
-      showConfirmError("Uploading needs the live API. This static preview has no backend.");
+      showConfirmError("Uploading doesn't work here. Please use the live site.");
       return;
     }
 
@@ -493,7 +493,7 @@
       resetScan();
     } catch (err) {
       if (err && err.missingApi) {
-        showConfirmError("Uploading needs the live API. This static preview has no backend.");
+        showConfirmError("Uploading doesn't work here. Please use the live site.");
       } else {
         showConfirmError((err && err.detail) || "Could not check these photos. Try again.");
       }

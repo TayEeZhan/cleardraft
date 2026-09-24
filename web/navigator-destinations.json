@@ -61,9 +61,9 @@
   },
   {
     "id": "intake-drop",
-    "title": "Drop .eml files",
+    "title": "Upload emails (.eml)",
     "hint": "Add emails saved from Gmail or Outlook as .eml files.",
-    "keywords": ["drop eml", "eml files", "upload email", "add email file", "outlook", "drag and drop", "drop files"]
+    "keywords": ["drop eml", "eml files", "upload email", "add email file", "outlook", "drag and drop", "drop files", "drop .eml files"]
   },
   {
     "id": "intake-paste",
@@ -73,9 +73,9 @@
   },
   {
     "id": "intake-dataset",
-    "title": "Upload a dataset (.zip)",
+    "title": "Upload whole inbox (.zip)",
     "hint": "Upload your company's whole inbox as one .zip file, processed live.",
-    "keywords": ["upload dataset", "upload zip", "upload company inbox", "upload your company's inbox", "company inbox zip", "bulk upload", "whole inbox", "zip file", "dataset upload"]
+    "keywords": ["upload dataset", "upload zip", "upload company inbox", "upload your company's inbox", "company inbox zip", "bulk upload", "whole inbox", "zip file", "dataset upload", "upload a dataset"]
   },
   {
     "id": "scan",
@@ -85,7 +85,7 @@
   },
   {
     "id": "start",
-    "title": "Start",
+    "title": "Start checking",
     "hint": "Jump straight into the next case that needs you.",
     "keywords": ["start", "begin", "get started", "next case", "start reviewing", "start the queue"]
   },
@@ -121,15 +121,15 @@
   },
   {
     "id": "export-submission",
-    "title": "Submission file (JSON)",
-    "hint": "Download the JSON submission file.",
-    "keywords": ["submission file", "json export", "download json", "submission json"]
+    "title": "Organiser file (JSON)",
+    "hint": "Download the JSON submission file for the competition organisers.",
+    "keywords": ["submission file", "json export", "download json", "submission json", "organiser file"]
   },
   {
     "id": "source-sample",
-    "title": "Sample company inbox",
+    "title": "Sample inbox",
     "hint": "Browse the shared sample inbox of 520 example messages — not your own mail.",
-    "keywords": ["sample inbox", "demo inbox", "shared inbox", "example emails", "520 messages", "browse sample"]
+    "keywords": ["sample inbox", "demo inbox", "shared inbox", "example emails", "520 messages", "browse sample", "sample company inbox"]
   },
   {
     "id": "source-mine",
@@ -140,18 +140,18 @@
   {
     "id": "try-sample-emails",
     "title": "Try 6 sample emails",
-    "hint": "Add 6 example emails to Your mail to try the pipeline.",
+    "hint": "Add 6 example emails to Your mail to see them checked.",
     "keywords": ["try sample emails", "try samples", "demo emails", "6 sample emails"]
   },
   {
     "id": "check-use-sample",
-    "title": "Use a sample pair",
+    "title": "No files? Try a sample",
     "hint": "No files? Try a sample Shipping Instruction / Bill of Lading pair.",
     "keywords": ["use a sample pair", "sample documents", "no files", "try a sample"]
   },
   {
     "id": "check-sample-discrepancies",
-    "title": "Sample with discrepancies",
+    "title": "Sample with errors",
     "hint": "A sample pair with a couple of wrong fields, on the Check a pair page.",
     "keywords": ["sample with discrepancies", "sample errors", "demo discrepancy"]
   },
@@ -175,9 +175,9 @@
   },
   {
     "id": "remove-uploaded-dataset",
-    "title": "Remove uploaded dataset",
-    "hint": "Remove the dataset you uploaded.",
-    "keywords": ["remove uploaded dataset", "delete dataset", "remove zip"]
+    "title": "Remove uploaded inbox",
+    "hint": "Remove the inbox you uploaded.",
+    "keywords": ["remove uploaded dataset", "delete dataset", "remove zip", "remove uploaded inbox"]
   },
   {
     "id": "sign-out",

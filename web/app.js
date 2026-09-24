@@ -594,13 +594,29 @@ function tabOf(row, source = SRC) {
 }
 
 const REASON = {
-  missing_attachment: "documents not attached",
+  missing_attachment: "SI or BL not attached",
   wrong_doc_type: "not an SI/BL pair",
   unreadable: "document could not be read",
   missing_value: "a field was blank",
-  unclassified: "could not tell what it wants",
+  unclassified: "unclear what the email asks",
   human_feedback: "flagged by a reviewer",
 };
+
+/* core/ speaks machine category codes; a clerk should never see one. Used
+   wherever a case's category is shown as its own word or two, never inside
+   a longer sentence that already reads naturally with the raw code. NOT
+   used in the CSV export's explanation column (buildDiscrepancyRows/
+   buildFullResultsRows) — that stays a literal, greppable value. */
+const CATEGORY_WORDS = {
+  BL_COMPARISON: "SI/BL check",
+  SI_REQUEST: "SI request",
+  INVOICE_QUERY: "invoice question",
+  GENERAL: "general email",
+  SPAM: "spam",
+};
+function categoryWord(cat) {
+  return CATEGORY_WORDS[cat] || String(cat || "").replace(/_/g, " ").toLowerCase();
+}
 
 /* Case-insensitive substring search across reference, subject, sender and
    the defect fields — including the human-readable form ("notify party")
@@ -619,7 +635,7 @@ function renderBoard() {
   const q = QUERY.trim().toLowerCase();
   const rows = activeBoard().filter((r) => tabOf(r) === TAB && matchesQuery(r, q));
 
-  if (!rows.length) { list.append(el("div", "empty", q ? "No matches in this tab." : "Nothing here.")); return; }
+  if (!rows.length) { list.append(el("div", "empty", q ? "No matches in this tab." : "Nothing in this tab.")); return; }
 
   for (const r of rows.slice(0, 200)) {
     const a = el("a", "case");
@@ -637,7 +653,7 @@ function renderBoard() {
     const tags = el("div", "case-fields");
     if (rowReview) {
       const chipCls = rowReview.verdict === "confirmed" ? "chip-confirmed" : rowReview.verdict === "flagged" || problemFound ? "chip-flagged" : "chip-done";
-      const chipTxt = rowReview.verdict === "confirmed" ? "Confirmed" : rowReview.verdict === "flagged" ? "Flagged" : problemFound ? "Problem found" : "Done";
+      const chipTxt = rowReview.verdict === "confirmed" ? "Confirmed" : rowReview.verdict === "flagged" ? "Marked wrong" : problemFound ? "Problem found" : "Done";
       tags.append(el("span", `chip ${chipCls}`, chipTxt));
     }
     const eff = effectiveFor(SRC, r);
@@ -646,9 +662,9 @@ function renderBoard() {
     } else if (eff.status === "NEEDS_REVIEW") {
       tags.append(el("span", "chip chip-review", REASON[eff.review_reason] || "needs a human"));
     } else if (r.category === "BL_COMPARISON") {
-      tags.append(el("span", "chip chip-match", "7 of 7 match"));
+      tags.append(el("span", "chip chip-match", "All match"));
     } else {
-      tags.append(el("span", "chip chip-quiet", r.category.replace(/_/g, " ").toLowerCase()));
+      tags.append(el("span", "chip chip-quiet", categoryWord(r.category)));
     }
     if (eff.changed) {
       const originalCount = (r.defect_fields || []).length;
@@ -830,8 +846,8 @@ function renderVerdict(d, host, { reply = true, afterVerdict = null, evaluation 
   const n = effDefectFields.length;
   const title = {
     mismatch: `${n} discrepanc${n === 1 ? "y" : "ies"} found`,
-    review: "A person needs to look at this",
-    match: d.comparisons.length ? "No mismatch detected" : "No document check was needed",
+    review: "Needs a human: check this yourself",
+    match: d.comparisons.length ? "No discrepancies found" : "No documents to check",
   }[kind];
 
   const v = el("div", `verdict verdict-${kind}`);
@@ -854,7 +870,7 @@ function renderVerdict(d, host, { reply = true, afterVerdict = null, evaluation 
   if (evaluation && evaluation.changed) {
     const clearedCount = d.defect_fields.length - effDefectFields.length;
     vt.append(el("div", "verdict-live-sub",
-      `Checked with ${d.defect_fields.length} discrepanc${d.defect_fields.length === 1 ? "y" : "ies"} · ${clearedCount} since marked as same by you`));
+      `Found ${d.defect_fields.length} discrepanc${d.defect_fields.length === 1 ? "y" : "ies"} · you marked ${clearedCount} as same`));
   }
   v.append(vt);
   host.append(v);
@@ -868,7 +884,7 @@ function renderVerdict(d, host, { reply = true, afterVerdict = null, evaluation 
   }
   if (reply) {
     const useDraft = evaluation && evaluation.changed && evaluation.reply_draft ? evaluation.reply_draft : d.reply_draft;
-    host.append(replyCard(d, useDraft, "Reply, ready to send", null, Boolean(evaluation && evaluation.changed && evaluation.reply_draft)));
+    host.append(replyCard(d, useDraft, "Reply draft", null, Boolean(evaluation && evaluation.changed && evaluation.reply_draft)));
   }
 }
 
@@ -891,7 +907,7 @@ function orderOfNote(d) {
 function orderOfNoteEl(orderSide, plainSide) {
   const note = el("div", "note order-note");
   note.append(document.createTextNode(
-    `The ${orderSide} names this party "To the order of" — that makes the Bill of Lading negotiable — while the ${plainSide} names a plain consignee. ClearDraft treats them as the same company, so it is not flagged. Confirm the BL type is what the shipper wants.`
+    `The ${orderSide} says "To the order of"; the ${plainSide} does not. Not counted as a discrepancy, but it changes the BL type. Check with the shipper.`
   ));
   return note;
 }
@@ -1198,20 +1214,20 @@ function yourPartLine(d, evaluation) {
 
   if (kind === "mismatch") {
     const n = effDefectFields.length;
-    return `Your part: Check the ${n} highlighted field${n === 1 ? "" : "s"} against ${n === 1 ? "its" : "their"} source lines, then send the reply asking for an amendment.`;
+    return `To do: check the ${n} highlighted field${n === 1 ? "" : "s"}, then send the reply.`;
   }
   if (kind === "review") {
     const reason = REASON[d.review_reason] || "it was not sure";
-    return `Your part: ClearDraft did not decide this one (${reason}). Open the documents and decide yourself.`;
+    return `To do: ClearDraft did not decide (${reason}). Check it yourself.`;
   }
   if (evaluation && evaluation.changed && d.status === "MISMATCH" && effStatus !== "MISMATCH") {
-    return "Your part: Nothing left to amend — the differences are marked as same by you. Check the reply and send it.";
+    return "To do: nothing to fix. Check the reply, then send it.";
   }
   if (d.comparisons && d.comparisons.length) {
-    return `Your part: All ${d.comparisons.length} fields match. Skim the table, then send the confirmation.`;
+    return `To do: all ${d.comparisons.length} fields match. Send the confirmation.`;
   }
-  const cat = d.category.replace(/_/g, " ").toLowerCase();
-  return `Your part: Not a document check (${cat}). Handle it as usual.`;
+  const cat = categoryWord(d.category);
+  return `To do: no SI/BL check needed (${cat}). Handle as usual.`;
 }
 
 function yourPartPanel(d, evaluation) {
@@ -1334,9 +1350,9 @@ function renderReview(id) {
   head.append(heading);
   const meta = el("div", "case-meta");
   meta.append(el("span", null, d.from));
-  meta.append(el("span", null, d.category.replace(/_/g, " ").toLowerCase()));
-  let decidedText = d.decided_by === "model" ? "Decided by AI (model)" : "Decided by rule";
-  if (typeof d.confidence === "number") decidedText += ` · confidence ${Math.round(d.confidence * 100)}%`;
+  meta.append(el("span", null, categoryWord(d.category)));
+  let decidedText = d.decided_by === "model" ? "AI helped decide" : "Decided by fixed rules";
+  if (typeof d.confidence === "number") decidedText += ` · ${Math.round(d.confidence * 100)}% sure`;
   meta.append(el("span", null, decidedText));
   head.append(meta);
 
@@ -1347,7 +1363,7 @@ function renderReview(id) {
     head.append(tag);
   }
   if (d.skipped_attachments && d.skipped_attachments.length) {
-    head.append(el("div", "skipped-note", `Not read: ${d.skipped_attachments.join(", ")}`));
+    head.append(el("div", "skipped-note", `Could not open: ${d.skipped_attachments.join(", ")}`));
   }
 
   host.append(head);
@@ -1362,7 +1378,7 @@ function renderReview(id) {
     renderVerdict(d, host, { reply: false, afterVerdict: yourPart, evaluation, rerender });
     host.append(recheckCard(d.recheck, evaluation));
     const recheckDraft = evaluation && evaluation.changed && evaluation.recheck_reply_draft ? evaluation.recheck_reply_draft : d.recheck.reply_draft;
-    host.append(replyCard(d, recheckDraft, "Follow-up reply, ready to send", d.reply_draft, Boolean(evaluation && evaluation.changed && evaluation.recheck_reply_draft)));
+    host.append(replyCard(d, recheckDraft, "Follow-up reply draft", d.reply_draft, Boolean(evaluation && evaluation.changed && evaluation.recheck_reply_draft)));
   } else {
     renderVerdict(d, host, { afterVerdict: yourPart, evaluation, rerender });
   }
@@ -1402,7 +1418,7 @@ function markSameConfirmPanel(c, d, markBtn, onSaved) {
      a Sign in / Create account link — never a silent hide, per the plan. */
   if (!ACCOUNT.user) {
     const msg = el("div", "mark-same-prompt");
-    msg.append(document.createTextNode("Sign in to teach ClearDraft that these two are the same "));
+    msg.append(document.createTextNode("Sign in to save these as the same "));
     msg.append(document.createTextNode(`${FIELD_WORDS[c.field] || c.field}. `));
     panel.append(msg);
     const link = el("a", "link-btn", "Sign in or create an account");
@@ -1420,7 +1436,7 @@ function markSameConfirmPanel(c, d, markBtn, onSaved) {
   panel.append(prompt);
 
   const scope = el("div", "mark-same-scope",
-    "This teaches ClearDraft only this exact wording, only on this field, only on your account — you can undo it any time.");
+    "Only this exact wording, this field, your account. You can undo it.");
   panel.append(scope);
 
   const reasonId = `mark-same-reason-${(d && d.email_id) || "adhoc"}-${c.field}`.replace(/[^a-zA-Z0-9-]+/g, "-");
@@ -1488,7 +1504,7 @@ function markSameConfirmPanel(c, d, markBtn, onSaved) {
 
       if (r.status === 401) {
         err.hidden = false;
-        err.textContent = "Sign in to teach ClearDraft";
+        err.textContent = "Please sign in first.";
         return;
       }
       if (!r.ok) {
@@ -1512,8 +1528,8 @@ function markSameConfirmPanel(c, d, markBtn, onSaved) {
       scope.hidden = true;
       note.hidden = false;
       note.textContent = j.already_marked
-        ? "Already marked as same — this row will move up now."
-        : "Saved — this row will move up now.";
+        ? 'Already saved. See "Marked as same" above.'
+        : 'Saved. See "Marked as same" above.';
       if (markBtn) markBtn.disabled = true;
       if (onSaved) onSaved(j.pair);
     } catch {
@@ -1612,7 +1628,7 @@ function markedSameLabel(pairId, onUndo) {
     undoBtn.disabled = true;
     const removed = await deletePair(pair.id);
     if (removed) {
-      toast("Removed — this row will move back to Discrepancies.");
+      toast("Removed. This counts as a discrepancy again.");
       if (onUndo) onUndo();
     } else {
       undoBtn.disabled = false;
@@ -1635,7 +1651,7 @@ function markedSameLabel(pairId, onUndo) {
 function seamTable(d, ctx = {}) {
   const wrap = el("div", "seam-wrap");
   const head = el("div", "seam-head");
-  head.append(el("div", null, "Field"), el("div", "h-si", "Shipping Instruction"), el("div", "h-seam"), el("div", "h-bl", "Draft Bill of Lading"));
+  head.append(el("div", null, "Field"), el("div", "h-si", "Shipping Instruction (SI)"), el("div", "h-seam"), el("div", "h-bl", "Draft Bill of Lading (BL)"));
   wrap.append(head);
 
   const evaluation = ctx.evaluation || null;
@@ -1681,7 +1697,7 @@ function seamTable(d, ctx = {}) {
       const fv = c[side];
       if (!fv || !fv.value) {
         cell.classList.add("empty-val");
-        cell.textContent = fv ? "left blank" : "not present";
+        cell.textContent = fv ? "left blank" : "not found";
       } else {
         cell.textContent = fv.value;
       }
@@ -1705,6 +1721,13 @@ function seamTable(d, ctx = {}) {
       const markBtn = el("button", "link-btn mark-same-btn", "Mark as same");
       markBtn.type = "button";
       markBtn.setAttribute("aria-expanded", "false");
+      const markTipId = `mark-same-tip-${((d && d.email_id) || "adhoc")}-${c.field}`.replace(/[^a-zA-Z0-9-]+/g, "-");
+      const markTipText = "These two wordings mean the same thing. Stop flagging them for your account.";
+      markBtn.title = markTipText;
+      markBtn.setAttribute("aria-describedby", markTipId);
+      const markTipDesc = el("span", "visually-hidden", markTipText);
+      markTipDesc.id = markTipId;
+      actions.append(markTipDesc);
       const panel = markSameConfirmPanel(c, d, markBtn, () => { if (ctx.rerender) ctx.rerender(); });
       markBtn.addEventListener("click", () => {
         panel.hidden = !panel.hidden;
@@ -1737,12 +1760,12 @@ function seamTable(d, ctx = {}) {
         panel.append(line);
         panel.append(el("div", "proof-src", `${fv.source}${fv.line_no ? `, line ${fv.line_no}` : ""}`));
       }
-      const btn = el("button", "proof-btn", panel.hidden ? "where this came from" : "hide");
+      const btn = el("button", "proof-btn", panel.hidden ? "Show source line" : "Hide source line");
       btn.setAttribute("aria-expanded", String(!panel.hidden));
       btn.addEventListener("click", () => {
         panel.hidden = !panel.hidden;
         btn.setAttribute("aria-expanded", String(!panel.hidden));
-        btn.textContent = panel.hidden ? "where this came from" : "hide";
+        btn.textContent = panel.hidden ? "Show source line" : "Hide source line";
       });
       actions.append(btn);
       wrap.append(panel);
@@ -1778,12 +1801,10 @@ function replyCard(d, text, title, earlier, redrafted = false) {
   const head = el("div", "reply-head");
   head.append(el("h3", null, title));
   const metaRow = el("div", "reply-meta-row");
-  metaRow.append(el("span", "reply-note", redrafted
-    ? "Built from the checked values. Not written by a model."
-    : "Built from the checked values. Not written by a model."));
+  metaRow.append(el("span", "reply-note", "Written from the checked fields. No AI used."));
   if (redrafted) {
     if (hadEdit) {
-      metaRow.append(el("span", "chip chip-quiet reply-redrafted-chip", "Your edit kept — Reset to draft to see the update for your marked pairs"));
+      metaRow.append(el("span", "chip chip-quiet reply-redrafted-chip", 'Your edits kept. Click "Reset to draft" for the updated reply.'));
     } else {
       metaRow.append(el("span", "chip chip-quiet reply-redrafted-chip", "Updated for your marked pairs"));
     }
@@ -1855,7 +1876,7 @@ function replyCard(d, text, title, earlier, redrafted = false) {
 
   if (earlier) {
     const past = el("details", "reply-past");
-    past.append(el("summary", null, "First discrepancy note, already sent"));
+    past.append(el("summary", null, "Your first reply (already sent)"));
     past.append(el("div", "reply-body", earlier));
     card.append(past);
   }
@@ -1877,7 +1898,7 @@ function replyCard(d, text, title, earlier, redrafted = false) {
         ta.focus();
         ta.select();
       }
-      toast("Reply copied — Gmail's link limit was hit, paste it into the email.");
+      toast("Too long for Gmail. Reply copied. Paste it in.");
       return;
     }
     window.open(url, "_blank", "noopener");
@@ -1901,7 +1922,7 @@ function replyCard(d, text, title, earlier, redrafted = false) {
   });
   foot.append(copyBtn);
 
-  const otherBtn = el("a", "btn btn-quiet", "Other mail app");
+  const otherBtn = el("a", "btn btn-quiet", "Open in my mail app");
   otherBtn.href = mailtoHref(startText);
   otherBtn.addEventListener("click", () => {
     REPLY_OPENED.add(d.email_id);
@@ -2023,7 +2044,7 @@ function advanceCase(id, context, { requireUndone, undoAction }) {
         TAB = "needs_review";
         for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === "needs_review"));
         navigateToCase(needsReview.email_id);
-        toast(`Discrepancies done — now: ${TAB_LABELS.needs_review} (N)`, undoAction);
+        toast(`All discrepancies done. Now: ${TAB_LABELS.needs_review}.`, undoAction);
         return;
       }
     }
@@ -2062,7 +2083,7 @@ function refreshDoneBarForReply(d) {
         bar.insertBefore(el("span", "chip chip-quiet reply-opened-chip", "Reply opened"), bar.firstChild);
       }
       const primary = bar.querySelector(".done-bar-actions .btn-primary");
-      if (primary) primary.textContent = "Reply sent — next case";
+      if (primary) primary.textContent = "I sent it — next case";
     }
     return;
   }
@@ -2094,7 +2115,7 @@ function buildReviewNoteForm(id, saveLabel, onSave) {
     const note = ta.value.trim();
     if (!note) {
       err.hidden = false;
-      err.textContent = "Tell us what's wrong before saving.";
+      err.textContent = "Write a short note first.";
       ta.focus();
       return;
     }
@@ -2132,7 +2153,7 @@ function reviewBar(d) {
     if (review.verdict === "confirmed") {
       status.append(el("span", null, "You confirmed this."));
     } else if (review.verdict === "flagged") {
-      status.append(el("span", null, "You flagged this: "));
+      status.append(el("span", null, "You said ClearDraft was wrong: "));
       status.append(el("span", "review-status-note", review.note));
     } else {
       status.append(el("span", null, review.note ? "Done: " : "Done."));
@@ -2160,11 +2181,15 @@ function reviewBar(d) {
   } else if (kind === "review") {
     const actions = el("div", "done-bar-actions");
 
-    const checkedBtn = el("button", "btn btn-primary", "I checked — documents agree");
+    // A case escalated because the SI or BL was never attached has nothing
+    // to "agree" — asking the sender for the missing documents is the real
+    // next step, so the button and the saved note both say that instead.
+    const missingDocs = d.review_reason === "missing_attachment";
+    const checkedBtn = el("button", "btn btn-primary", missingDocs ? "Asked sender for the documents" : "I checked — documents agree");
     checkedBtn.type = "button";
     checkedBtn.addEventListener("click", () => {
-      setReview(source, id, "done", "checked by hand: documents agree");
-      const undo = confirmToast(d, "Checked", source);
+      setReview(source, id, "done", missingDocs ? "asked sender for the documents" : "checked by hand: documents agree");
+      const undo = confirmToast(d, missingDocs ? "Noted" : "Checked", source);
       if (!context) return;
       advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
@@ -2197,8 +2222,8 @@ function reviewBar(d) {
     const actions = el("div", "done-bar-actions");
 
     const primaryLabel = replySent
-      ? "Reply sent — next case"
-      : kind === "mismatch" ? "Discrepancy confirmed — next case" : "All clear confirmed — next case";
+      ? "I sent it — next case"
+      : kind === "mismatch" ? "Confirm discrepancy — next" : "Confirm all clear — next";
     const confirmBtn = el("button", "btn btn-primary", primaryLabel);
     confirmBtn.type = "button";
     confirmBtn.addEventListener("click", () => {
@@ -2209,12 +2234,17 @@ function reviewBar(d) {
     });
     actions.append(confirmBtn);
 
-    const wrongBtn = el("button", "btn btn-quiet", "Something's wrong");
+    const wrongBtn = el("button", "btn btn-quiet", "ClearDraft is wrong");
     wrongBtn.type = "button";
     wrongBtn.setAttribute("aria-expanded", "false");
-    actions.append(wrongBtn);
+    const wrongTipText = "Use this if ClearDraft's check is wrong, not the BL.";
+    wrongBtn.title = wrongTipText;
+    wrongBtn.setAttribute("aria-describedby", "review-wrong-tip");
+    const wrongTipDesc = el("span", "visually-hidden", wrongTipText);
+    wrongTipDesc.id = "review-wrong-tip";
+    actions.append(wrongBtn, wrongTipDesc);
 
-    const skipBtn = el("button", "link-btn", "Skip — next case");
+    const skipBtn = el("button", "link-btn", "Skip");
     skipBtn.type = "button";
     skipBtn.addEventListener("click", () => {
       if (!context) return;
@@ -2226,7 +2256,7 @@ function reviewBar(d) {
 
     const noteForm = buildReviewNoteForm(id, "Save and next case", (note) => {
       setReview(source, id, "flagged", note);
-      const undo = confirmToast(d, "Flagged", source);
+      const undo = confirmToast(d, "Marked wrong", source);
       if (!context) return;
       advanceCase(id, context, { requireUndone: true, undoAction: undo });
     });
@@ -2251,7 +2281,7 @@ function reviewBar(d) {
   /* On an unreviewed needs-a-human case, D does not confirm anything — it
      just points at the two buttons above — so the hint says only what D
      actually still does there. */
-  const hintText = !review && kind === "review" ? "N skip" : "D confirm · N skip";
+  const hintText = !review && kind === "review" ? "Keys: N = skip" : "Keys: D = confirm, N = skip";
   bar.append(el("div", "done-bar-hint", hintText));
   return bar;
 }
@@ -2285,7 +2315,7 @@ function initCaseKeyboardNav() {
       return;
     }
     if (!isReviewed(source, id) && effectiveKind(d) === "review") {
-      toast("ClearDraft didn't decide this one — choose an outcome below.");
+      toast("ClearDraft didn't decide this. Pick a button below.");
       return;
     }
     let undo;
@@ -2302,18 +2332,18 @@ function initCaseKeyboardNav() {
    first - it is the one a tired clerk misses, because they only re-read the
    fields they complained about. */
 const OUTCOME = {
-  newly_broken: ["Broken by this amendment", "mismatch"],
+  newly_broken: ["Newly wrong in this draft", "mismatch"],
   still_wrong:  ["Still wrong", "mismatch"],
   unreadable:   ["Could not be read", "review"],
   fixed:        ["Fixed", "match"],
-  ok:           ["Unchanged, correct", "quiet"],
+  ok:           ["Correct, unchanged", "quiet"],
 };
 
 function recheckCard(rc, evaluation) {
   const card = el("div", "recheck");
   const head = el("div", "recheck-head");
-  head.append(el("h3", null, "Amended draft received, re-checked"));
-  if (rc.demo) head.append(el("span", "chip chip-quiet", "demo document"));
+  head.append(el("h3", null, "New draft BL, checked again"));
+  if (rc.demo) head.append(el("span", "chip chip-quiet", "sample document"));
   card.append(head);
 
   const covered = (evaluation && evaluation.recheck) || {};
@@ -2322,7 +2352,7 @@ function recheckCard(rc, evaluation) {
   for (const kind of order) {
     const rows = rc.rows.filter((r) => (r.outcome === kind) && !(kind !== "ok" && covered[r.field]));
     // A still_wrong/newly_broken row whose SI↔v2 pair is covered moves to
-    // "Unchanged, correct" — labelled "marked as same" — never "Fixed".
+    // "Correct, unchanged" — labelled "marked as same" — never "Fixed".
     if (kind === "ok") {
       for (const r of rc.rows) {
         if (r.outcome !== "ok" && covered[r.field] && !rows.includes(r)) rows.push(r);
@@ -2424,10 +2454,10 @@ function renderReviewsPanel(host) {
   panel.append(el("h3", null, ACCOUNT.user
     ? "Your saved checks of ClearDraft's answers"
     : "Your checks of ClearDraft's answers (this browser)"));
-  panel.append(el("div", "sub", `You reviewed ${total} case${total === 1 ? "" : "s"}: ${confirmed} looked right, ${flagged} flagged as wrong`));
+  panel.append(el("div", "sub", `You reviewed ${total} case${total === 1 ? "" : "s"}: ${confirmed} right, ${flagged} wrong`));
   panel.append(el("div", "sub", `Today: ${reviewedTodayCount().handled} handled`));
   if (agreementDenom > 0) {
-    panel.append(el("div", "reviews-agreement", `Agreement: ${Math.round((confirmed / agreementDenom) * 100)}%`));
+    panel.append(el("div", "reviews-agreement", `ClearDraft was right: ${Math.round((confirmed / agreementDenom) * 100)}%`));
   }
   if (flaggedList.length) {
     const list = el("ul", "reviews-flagged-list");
@@ -2446,7 +2476,7 @@ function renderReviewsPanel(host) {
      verdict on a needs-a-human case for the clerk to agree or disagree
      with, so they are a record of what the queue turned up, not a miss. */
   if (problemsFound.length) {
-    panel.append(el("h4", null, "Problems found on escalated cases"));
+    panel.append(el("h4", null, 'Problems you found on "Needs a human" cases'));
     const problemList = el("ul", "reviews-flagged-list");
     for (const f of problemsFound) {
       const li = el("li");
@@ -2469,10 +2499,10 @@ function renderAccuracy() {
 
   const grid = el("div", "stat-grid");
   const stats = [
-    [s.totals.emails, "messages processed", `${s.runtime_seconds}s for the full inbox`],
-    [s.totals.compared, "document pairs compared", `${s.totals.attachments} attachments opened`],
+    [s.totals.emails, "emails read", `${s.runtime_seconds}s for the full inbox`],
+    [s.totals.compared, "SI/BL pairs checked", `${s.totals.attachments} attachments opened`],
     [s.totals.defects_found, "drafts with a discrepancy", "caught before the BL was issued"],
-    [`${Math.round(s.decisions.rule_pct * 100)}%`, "decided by rule, not AI", `${s.model.calls} model calls this run`],
+    [`${Math.round(s.decisions.rule_pct * 100)}%`, "decided without AI", `AI used ${s.model.calls} times`],
   ];
   for (const [n, l, sub] of stats) {
     const c = el("div", "stat");
@@ -2498,18 +2528,16 @@ function renderAccuracy() {
   host.append(two);
 
   const p3 = el("div", "panel");
-  p3.append(el("h3", null, "When it asked for a human"));
-  p3.append(el("div", "sub", "Cases it refused to decide on its own."));
+  p3.append(el("h3", null, "Why it asked a human"));
+  p3.append(el("div", "sub", "Cases it would not decide alone."));
   p3.append(bars(s.escalations));
   host.append(p3);
 
   if (s.challenge) host.append(challengePanel(s.challenge));
 
   const note = el("div", "note");
-  note.innerHTML = `<b>How to read these numbers.</b> They are measured on every run against the
-    sample inbox, not typed in. The model is a fallback: it is asked only for a field the
-    format readers could not find, and anything it returns must appear word for word in the
-    document or it is thrown away. On this run it was consulted
+  note.innerHTML = `<b>About AI.</b> AI is used only when rules can't find a field. Its answer
+    must appear word for word in the document. Used
     <b>${s.model.calls} time${s.model.calls === 1 ? "" : "s"}</b>.`;
   host.append(note);
 }
@@ -2520,20 +2548,20 @@ function renderAccuracy() {
 function challengePanel(c) {
   const p = el("div", "panel");
   p.append(el("h3", null, "On mail it has never seen"));
-  p.append(el("div", "sub", `${c.emails} held-out emails and ${c.doc_pairs.length} document pairs, written without reference to our rules. Each run twice.`));
+  p.append(el("div", "sub", `${c.emails} emails it had never seen, checked with and without AI.`));
 
   const t = el("div", "cmp");
   const head = el("div", "cmp-row cmp-head");
-  for (const h of ["", "Rules only", "Rules + model"]) head.append(el("div", null, h));
+  for (const h of ["", "Without AI", "With AI"]) head.append(el("div", null, h));
   t.append(head);
   const rows = [
     ["Email sorted correctly", pct(c.category_accuracy.rules_only), pct(c.category_accuracy.with_model)],
-    ["Request understood (intent)", pct(c.intent_accuracy.rules_only), pct(c.intent_accuracy.with_model)],
+    ["Request understood", pct(c.intent_accuracy.rules_only), pct(c.intent_accuracy.with_model)],
   ];
   const fr = c.doc_pairs.reduce((a, d) => a + d.fields_rules, 0);
   const fm = c.doc_pairs.reduce((a, d) => a + d.fields_model, 0);
   const fp = c.doc_pairs.reduce((a, d) => a + d.fields_present, 0);
-  rows.push(["Fields read, unfamiliar labels", `${fr} of ${fp}`, `${fm} of ${fp}`]);
+  rows.push(["Fields found (unusual labels)", `${fr} of ${fp}`, `${fm} of ${fp}`]);
   for (const r of rows) {
     const row = el("div", "cmp-row");
     row.append(el("div", "cmp-l", r[0]), el("div", "cmp-v", r[1]), el("div", "cmp-v cmp-good", r[2]));
@@ -2542,12 +2570,9 @@ function challengePanel(c) {
   p.append(t);
 
   const facts = el("div", "cmp-facts");
-  const placementRejections = c.placement_rejections || 0;
   facts.textContent =
-    `The model decided ${c.decided_by_model} emails and got ${c.model_wrong} wrong. ` +
-    `It was asked only what the rules could not answer: ${c.calls} calls, ${c.tokens.toLocaleString()} tokens in total. ` +
-    `Answers not found word for word in the document are discarded; ${c.gate_rejections} were discarded this run. ` +
-    `Values found on the page but assigned to the wrong field are rejected separately; ${placementRejections} were rejected this run.`;
+    `AI decided ${c.decided_by_model} emails and got ${c.model_wrong} wrong. ` +
+    `${c.gate_rejections} AI answers were thrown out.`;
   p.append(facts);
   return p;
 }
@@ -2598,10 +2623,15 @@ function showCheckApiMissing() {
   const host = checkResultHost();
   host.replaceChildren();
   const panel = el("div", "check-error");
-  panel.append(el("strong", null, "The live checker needs the API."));
-  const p = el("p", null, "It runs on the deployed site; locally start it with:");
-  panel.append(p);
-  panel.append(el("code", null, "python -m uvicorn api.index:app"));
+  panel.append(el("strong", null, "The checker doesn't work here."));
+  panel.append(el("p", null, "Please use the live site."));
+  // The start command is only useful to someone running this on their own
+  // machine — a visitor on the deployed site has no use for it.
+  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+    const p = el("p", null, "Locally, start it with:");
+    panel.append(p);
+    panel.append(el("code", null, "python -m uvicorn api.index:app"));
+  }
   host.append(panel);
 }
 
@@ -2620,13 +2650,11 @@ function renderCheckResult(data, evaluation = null) {
 
   const secs = typeof data.seconds === "number" ? data.seconds.toFixed(2) : "?";
   const calls = data.model ? data.model.calls : 0;
-  const rejections = data.model ? data.model.gate_rejections : 0;
-  const placementRejections = data.model ? (data.model.placement_rejections || 0) : 0;
-  host.append(el("div", "check-meta", `read in ${secs}s · model calls ${calls} · ${rejections} absent-source rejection${rejections === 1 ? "" : "s"} · ${placementRejections} wrong-field rejection${placementRejections === 1 ? "" : "s"}`));
+  host.append(el("div", "check-meta", `Checked in ${secs}s · AI used ${calls} time${calls === 1 ? "" : "s"}`));
 
   if (data.email_reading) {
     const er = data.email_reading;
-    host.append(el("div", "check-meta", `The email reads as: ${String(er.category || "").toLowerCase()} / ${er.intent} (decided by ${er.decided_by})`));
+    host.append(el("div", "check-meta", `Email type: ${categoryWord(er.category)}`));
   }
 
   host.append(printButton());
@@ -2677,7 +2705,7 @@ async function runCheck() {
     if (!r.ok) {
       // The API answered but failed. Saying "not deployed" here would send a
       // judge looking for the wrong problem.
-      showCheckError(`The check failed on the server (HTTP ${r.status}). Try again, or use a sample pair.`);
+      showCheckError(`The check failed (error ${r.status}). Try again or try a sample.`);
       return;
     }
     const data = await r.json();
@@ -2742,7 +2770,7 @@ function renderHome() {
     if (s.totals && typeof s.totals.emails === "number") parts.push(`${s.totals.emails} messages read`);
     if (s.totals && typeof s.totals.defects_found === "number") parts.push(`${s.totals.defects_found} discrepancies caught`);
     if (s.challenge && s.challenge.category_accuracy && typeof s.challenge.category_accuracy.with_model === "number") {
-      parts.push(`${pct(s.challenge.category_accuracy.with_model)} of never-seen mail sorted correctly`);
+      parts.push(`${pct(s.challenge.category_accuracy.with_model)} of new mail sorted correctly`);
     }
     if (parts.length) proof.textContent = parts.join(" · ");
   }
@@ -2780,12 +2808,12 @@ function renderBoardView() {
   const lede = $("#board-lede");
   if (SRC === "mine") {
     lede.textContent = mineCount
-      ? `Your own mail, ${mineCount} message${mineCount === 1 ? "" : "s"} read by the live pipeline.`
-      : "Add your own emails and watch the live pipeline check them.";
+      ? `Your mail: ${mineCount} email${mineCount === 1 ? "" : "s"} checked.`
+      : "Add emails to check them.";
   } else if (SRC === "uploaded") {
-    lede.textContent = `${UPLOADED.board.length} email${UPLOADED.board.length === 1 ? "" : "s"} from "${UPLOADED.name}", processed live on the server — nothing from this dataset is stored there.`;
+    lede.textContent = `${UPLOADED.board.length} email${UPLOADED.board.length === 1 ? "" : "s"} from "${UPLOADED.name}". Not stored on our server.`;
   } else {
-    lede.textContent = `One shared mailbox, ${sampleCount} messages. Every one has been read, sorted, and — where documents were attached — checked field by field.`;
+    lede.textContent = `Sample inbox: ${sampleCount} emails, all sorted and checked.`;
   }
 
   const showEmpty = SRC === "mine" && mineCount === 0;
@@ -2895,7 +2923,7 @@ function renderTriageBanner() {
     banner.append(headline);
 
     const row = el("div", "triage-row");
-    const startBtn = el("button", "btn btn-primary triage-start-btn", "Start");
+    const startBtn = el("button", "btn btn-primary triage-start-btn", "Start checking");
     startBtn.type = "button";
     startBtn.addEventListener("click", startQueue);
     row.append(startBtn);
@@ -2907,7 +2935,7 @@ function renderTriageBanner() {
     bar.value = handled;
     bar.setAttribute("aria-labelledby", "triage-progress-label");
     progWrap.append(bar);
-    const progLabel = el("span", "triage-progress-label", `${handled} of ${totalY} handled`);
+    const progLabel = el("span", "triage-progress-label", `${handled} of ${totalY} done`);
     progLabel.id = "triage-progress-label";
     progWrap.append(progLabel);
     row.append(progWrap);
@@ -2922,7 +2950,7 @@ function renderTriageBanner() {
 
     const { handled: t, pairs } = reviewedTodayCount();
     let doneText = `You handled ${t} today.`;
-    if (pairs > 0) doneText += ` That saved up to ${pairs * 10} min of manual checking (estimate: up to 10 min per SI/BL pair by hand).`;
+    if (pairs > 0) doneText += ` Up to ${pairs * 10} min saved (about 10 min per SI/BL pair).`;
     banner.append(el("div", "triage-done-note", doneText));
   }
 }
@@ -2972,8 +3000,8 @@ function showUploadApiMissing() {
   host.replaceChildren();
   host.hidden = false;
   const panel = el("div", "check-error");
-  panel.append(el("strong", null, "Uploading needs the live API."));
-  panel.append(el("p", null, "This static preview has no backend. Use the live site:"));
+  panel.append(el("strong", null, "Uploading doesn't work here."));
+  panel.append(el("p", null, "Please use the live site:"));
   const a = el("a", "check-error-link", "https://cleardraft-one.vercel.app");
   a.href = "https://cleardraft-one.vercel.app";
   a.target = "_blank";
@@ -3335,7 +3363,7 @@ async function uploadDataset(file) {
       // it ever reaches api/_dataset.py, with a plain, non-JSON body - the
       // 4 MB app-level cap should catch this first, but this is the
       // friendly fallback when it doesn't.
-      detail = "The zip is too large to upload (4 MB max). Try a smaller dataset.";
+      detail = "The zip is too large to upload (4 MB max). Try a smaller file.";
     }
     if (!detail) {
       // Any other failure with a body we can't read as our own error shape
@@ -3372,8 +3400,8 @@ async function uploadDataset(file) {
   renderDatasetResult();
 
   toast(persisted
-    ? `Dataset processed: ${UPLOADED.name}`
-    : "Processed — not saved in this browser (re-upload after refresh).");
+    ? `Inbox checked: ${UPLOADED.name}`
+    : "Checked, but not saved. Upload again after a refresh.");
 
   setUploadingUI(false);
 }
@@ -3404,14 +3432,14 @@ function initDatasetUpload() {
   if (removeBtn) {
     removeBtn.addEventListener("click", () => {
       if (UPLOADING) return;
-      if (!confirm(`Remove the uploaded dataset "${UPLOADED.name}"? This only removes it from this browser — nothing was ever stored on the server.`)) return;
+      if (!confirm(`Remove "${UPLOADED.name}" from this browser?`)) return;
       UPLOADED = emptyUploaded();
       saveUploaded();
       purgeUploadedReviews();
       if (SRC === "uploaded") setSourceKey("mine");
       renderDatasetResult();
       renderBoardView();
-      toast("Uploaded dataset removed.");
+      toast("Uploaded inbox removed.");
     });
   }
 }
@@ -3541,7 +3569,7 @@ async function submitPaste(e) {
 
   if (!body) {
     const err = $("#paste-body-error");
-    if (err) { err.hidden = false; err.textContent = "Email text is required."; }
+    if (err) { err.hidden = false; err.textContent = "Paste the email text first."; }
     const ta = $("#paste-body");
     if (ta) ta.focus();
     return;
@@ -3904,7 +3932,7 @@ function renderAccountSignedInView() {
     loadPairs().then(() => {
       const n = PAIRS.length;
       summary.textContent = n
-        ? `${n} of ${MAX_PAIRS} pairs marked as the same, only visible to you.`
+        ? `${n} of ${MAX_PAIRS} saved. Only you can see them.`
         : "No pairs marked as the same yet.";
     });
   }
@@ -3998,7 +4026,7 @@ function learnedPairRow(pair, openEdit) {
   row.append(head);
 
   const norm = pair.a !== (pair.si_raw || pair.a) || pair.b !== (pair.bl_raw || pair.b);
-  if (norm) row.append(el("div", "learned-matches-as", `matches as "${pair.a}" ↔ "${pair.b}"`));
+  if (norm) row.append(el("div", "learned-matches-as", `compared as "${pair.a}" ↔ "${pair.b}"`));
 
   const reasonLine = el("div", "learned-reason");
   reasonLine.textContent = pair.note ? `"${pair.note}"` : "No reason given";
@@ -4028,12 +4056,12 @@ function learnedPairRow(pair, openEdit) {
 
   function buildEditForm() {
     editForm.replaceChildren();
-    const siLabel = el("label", "field-label", "Shipping Instruction wording");
+    const siLabel = el("label", "field-label", "SI wording");
     const siInput = document.createElement("input");
     siInput.type = "text"; siInput.className = "field-input"; siInput.value = pair.si_raw || pair.a;
     editForm.append(siLabel, siInput);
 
-    const blLabel = el("label", "field-label", "Draft Bill of Lading wording");
+    const blLabel = el("label", "field-label", "BL wording");
     const blInput = document.createElement("input");
     blInput.type = "text"; blInput.className = "field-input"; blInput.value = pair.bl_raw || pair.b;
     editForm.append(blLabel, blInput);
@@ -4253,7 +4281,7 @@ function toast(msg, action) {
   try {
     [DATA] = await Promise.all([load(), fetchMe()]);
   } catch {
-    $("#case-list").append(el("div", "empty", "Could not load results. Run: python scripts/export_ui_data.py"));
+    $("#case-list").append(el("div", "empty", "Could not load the inbox. Please refresh."));
     return;
   }
 

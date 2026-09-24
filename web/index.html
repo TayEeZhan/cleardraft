@@ -21,7 +21,7 @@
   <a class="brand" href="#/">
     <span class="mark" aria-hidden="true"></span>
     <span class="brand-name">ClearDraft</span>
-    <span class="brand-sub">SI / BL verification</span>
+    <span class="brand-sub">SI and BL checker</span>
   </a>
   <nav class="nav" aria-label="Views">
     <a href="#/" data-route="home" class="nav-link">Home</a>
@@ -60,9 +60,9 @@
   <section id="view-home" class="view">
     <div class="home-hero">
       <h1>Shipping paperwork, checked in seconds.</h1>
-      <p class="lede">ClearDraft sorts your shipping inbox, checks every draft Bill of Lading against its Shipping Instruction, and drafts the reply — or hands it to a person when it isn't sure.</p>
+      <p class="lede">Checks each draft Bill of Lading (BL) against its Shipping Instruction (SI), and writes the reply. If unsure, it asks you.</p>
       <a href="#/case/email_004" class="btn btn-primary btn-large">See a real check</a>
-      <p class="hero-caption">A draft with two wrong fields, the source lines, and the reply it drafted.</p>
+      <p class="hero-caption">A draft BL with two wrong fields, and its reply.</p>
     </div>
 
     <div class="home-cards">
@@ -71,7 +71,7 @@
         <div class="home-card-line">Upload an SI and a draft BL, or try a sample.</div>
       </a>
       <a class="home-card" href="#/board" id="home-card-mine">
-        <div class="home-card-title">Process your own emails</div>
+        <div class="home-card-title">Check your own emails</div>
         <div class="home-card-line">Drop in .eml files saved from Gmail or Outlook.</div>
       </a>
     </div>
@@ -87,7 +87,7 @@
 
     <div class="source-switch" role="group" aria-label="Mail source">
       <button type="button" class="switch-btn" id="switch-mine" aria-pressed="true">Your mail (<span id="mine-count">0</span>)</button>
-      <button type="button" class="switch-btn" id="switch-sample" aria-pressed="false">Sample company inbox (<span id="sample-count">520</span>)</button>
+      <button type="button" class="switch-btn" id="switch-sample" aria-pressed="false">Sample inbox (<span id="sample-count">520</span>)</button>
       <button type="button" class="switch-btn" id="switch-uploaded" aria-pressed="false" hidden></button>
     </div>
 
@@ -101,9 +101,9 @@
 
     <div class="addmail" id="addmail-panel" hidden>
       <div class="addmail-tabs" role="tablist" aria-label="Add an email">
-        <button type="button" class="switch-btn" id="addmail-tab-drop" role="tab" aria-selected="true">Drop .eml files</button>
+        <button type="button" class="switch-btn" id="addmail-tab-drop" role="tab" aria-selected="true">Upload emails (.eml)</button>
         <button type="button" class="switch-btn" id="addmail-tab-paste" role="tab" aria-selected="false">Paste an email</button>
-        <button type="button" class="switch-btn" id="addmail-tab-dataset" role="tab" aria-selected="false">Upload a dataset (.zip)</button>
+        <button type="button" class="switch-btn" id="addmail-tab-dataset" role="tab" aria-selected="false">Upload whole inbox (.zip)</button>
         <button type="button" class="switch-btn" id="addmail-tab-scan" role="tab" aria-selected="false">Scan a photo</button>
       </div>
 
@@ -111,7 +111,7 @@
         <div class="drop-zone drop-zone-large" id="mail-drop-zone">
           <label for="mail-file-input" class="drop-label">
             <span class="drop-title">Drop .eml files here</span>
-            <span class="drop-hint">or choose files</span>
+            <span class="drop-hint">or click to choose</span>
           </label>
         </div>
         <p class="mine-howto">Gmail: open the email → ⋮ → Download message. Outlook: drag the email to the desktop.</p>
@@ -145,8 +145,8 @@
       <div class="addmail-section" id="addmail-dataset" hidden>
         <div class="drop-zone drop-zone-large" id="dataset-drop-zone">
           <label for="dataset-file-input" class="drop-label">
-            <span class="drop-title">Upload a dataset (.zip)</span>
-            <span class="drop-hint">The company's inbox as a .zip (inbox/ + attachments/). Processed live; nothing is stored on the server.</span>
+            <span class="drop-title">Upload whole inbox (.zip)</span>
+            <span class="drop-hint">A .zip with inbox/ and attachments/ folders. Not stored.</span>
           </label>
           <input type="file" id="dataset-file-input" class="drop-input" accept=".zip,application/zip">
         </div>
@@ -161,7 +161,7 @@
 
     <div class="mine-empty-actions" id="mine-sample-actions" hidden>
       <button type="button" class="link-btn" id="try-samples-btn">Try 6 sample emails</button>
-      <button type="button" class="link-btn" id="show-sample-inbox-btn">Show the sample company inbox</button>
+      <button type="button" class="link-btn" id="show-sample-inbox-btn">Open the sample inbox</button>
     </div>
 
     <div id="board-normal" hidden>
@@ -176,7 +176,8 @@
           <div class="export-menu" id="export-menu" hidden role="menu">
             <button type="button" class="export-menu-item" id="export-discrepancy-csv" role="menuitem">Discrepancy report (CSV)</button>
             <button type="button" class="export-menu-item" id="export-full-csv" role="menuitem">Full results (CSV)</button>
-            <button type="button" class="export-menu-item" id="export-submission-json" role="menuitem">Submission file (JSON)</button>
+            <button type="button" class="export-menu-item" id="export-submission-json" role="menuitem" title="For the competition organisers. Not needed for daily work." aria-describedby="export-submission-desc">Organiser file (JSON)</button>
+            <span id="export-submission-desc" class="visually-hidden">For the competition organisers. Not needed for daily work.</span>
           </div>
         </div>
         <div class="mine-actions" id="mine-actions" hidden>
@@ -184,19 +185,21 @@
           <button type="button" class="link-btn" id="clear-mine-btn">Clear your mail</button>
         </div>
         <div class="mine-actions" id="uploaded-actions" hidden>
-          <button type="button" class="link-btn" id="remove-uploaded-btn">Remove uploaded dataset</button>
+          <button type="button" class="link-btn" id="remove-uploaded-btn">Remove uploaded inbox</button>
         </div>
       </div>
 
       <div class="tabs" role="tablist" aria-label="Filter by outcome">
-        <button role="tab" class="tab" data-tab="mismatch" aria-selected="true">
+        <button role="tab" class="tab" data-tab="mismatch" aria-selected="true" title="The draft BL differs from the SI in at least one field." aria-describedby="tab-mismatch-desc">
           <span class="tab-n" id="n-mismatch">0</span>
           <span class="tab-l">Discrepancy found</span>
         </button>
-        <button role="tab" class="tab" data-tab="needs_review" aria-selected="false">
+        <span id="tab-mismatch-desc" class="visually-hidden">The draft BL differs from the SI in at least one field.</span>
+        <button role="tab" class="tab" data-tab="needs_review" aria-selected="false" title="ClearDraft wasn't sure, so it didn't decide. You check it." aria-describedby="tab-needs-review-desc">
           <span class="tab-n" id="n-needs_review">0</span>
           <span class="tab-l">Needs a human</span>
         </button>
+        <span id="tab-needs-review-desc" class="visually-hidden">ClearDraft wasn't sure, so it didn't decide. You check it.</span>
         <button role="tab" class="tab" data-tab="cleared" aria-selected="false">
           <span class="tab-n" id="n-cleared">0</span>
           <span class="tab-l">Cleared</span>
@@ -219,7 +222,7 @@
   <section id="view-check" class="view" hidden>
     <div class="view-head">
       <h1>Check a pair</h1>
-      <p class="lede">Upload a Shipping Instruction and a draft Bill of Lading. ClearDraft reads both and reports whether they agree.</p>
+      <p class="lede">Add a Shipping Instruction (SI) and a draft Bill of Lading (BL). See where they differ.</p>
     </div>
 
     <form id="check-form" class="check-form" novalidate>
@@ -258,11 +261,11 @@
 
       <div class="check-actions">
         <button type="submit" class="btn btn-primary" id="check-submit" disabled>Check these documents</button>
-        <button type="button" class="link-btn" id="use-sample" aria-expanded="false">No files? Use a sample pair</button>
+        <button type="button" class="link-btn" id="use-sample" aria-expanded="false">No files? Try a sample</button>
       </div>
 
       <div class="sample-choice" id="sample-choice" hidden>
-        <button type="button" class="link-btn" id="sample-discrepancies">Sample with discrepancies</button>
+        <button type="button" class="link-btn" id="sample-discrepancies">Sample with errors</button>
         <button type="button" class="link-btn" id="sample-inbox">Sample from the inbox</button>
       </div>
     </form>
@@ -273,7 +276,7 @@
   <section id="view-account" class="view" hidden>
     <div class="view-head">
       <h1 id="account-title">Create your account</h1>
-      <p class="account-reassure">No Gmail connection needed — you add emails yourself, and only you can see them.</p>
+      <p class="account-reassure">No Gmail link needed. Only you see your emails.</p>
     </div>
 
     <form id="account-form" class="account-form" novalidate>
@@ -306,7 +309,7 @@
       <section class="panel" id="learned-pairs-panel">
         <h3>Marked as same</h3>
         <p class="sub" id="learned-summary-line">Loading…</p>
-        <a class="btn btn-quiet" href="#/learned">Manage your marked pairs</a>
+        <a class="btn btn-quiet" href="#/learned">Open "Marked as same"</a>
       </section>
     </div>
   </section>
@@ -314,14 +317,14 @@
   <section id="view-learned" class="view" hidden>
     <div class="view-head">
       <h1 id="learned-heading" tabindex="-1">Marked as same</h1>
-      <p class="lede">Exact wordings you've told ClearDraft are the same, per field, per account. Removing one brings any discrepancy it was covering back.</p>
+      <p class="lede">Wordings you told ClearDraft are the same. Remove one to count it again.</p>
     </div>
 
     <div id="learned-signed-out" class="empty" hidden>
       <p>Sign in to see and manage your marked pairs.</p>
       <a class="link-btn" href="#/account">Sign in or create an account</a>
     </div>
-    <div id="learned-unavailable" class="empty" hidden>Accounts aren't available on this deployment.</div>
+    <div id="learned-unavailable" class="empty" hidden>Accounts are not available here.</div>
 
     <div id="learned-signed-in" hidden>
       <p class="learned-usage" id="learned-usage-line"></p>
@@ -335,7 +338,7 @@
       <div class="learned-chips" id="learned-field-chips" role="group" aria-label="Filter by field"></div>
 
       <div id="learned-list" class="learned-list" aria-live="polite"></div>
-      <div id="learned-empty" class="empty" hidden>No pairs marked yet — mark a mismatch as "the same" on a discrepancy to teach one. <a href="#/board">Go to the inbox</a></div>
+      <div id="learned-empty" class="empty" hidden>Nothing yet. On a discrepancy, click "Mark as same". <a href="#/board">Go to the inbox</a></div>
     </div>
   </section>
 
