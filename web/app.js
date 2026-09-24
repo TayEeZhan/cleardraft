@@ -225,6 +225,24 @@ function updateTabCounts() {
     const n = $(`#n-${k}`);
     if (!n) continue;
     n.textContent = q ? rows.filter((r) => tabOf(r) === k && matchesQuery(r, q)).length : totals[k];
+
+    /* "k left" under the count — search never affects it, so it always
+       reads against the whole tab. Shown only once the tab has at least
+       one reviewed row (an untouched tab gains nothing from repeating its
+       own count back as "N left"); a fully finished tab still shows
+       "0 left", which is exactly the satisfying part. */
+    const tabRows = rows.filter((r) => tabOf(r) === k);
+    const reviewedInTab = tabRows.filter((r) => isReviewed(r.email_id)).length;
+    let leftSpan = n.parentElement && n.parentElement.querySelector(".tab-left");
+    if (reviewedInTab > 0) {
+      if (!leftSpan) {
+        leftSpan = el("span", "tab-left");
+        n.insertAdjacentElement("afterend", leftSpan);
+      }
+      leftSpan.textContent = `${tabRows.length - reviewedInTab} left`;
+    } else if (leftSpan) {
+      leftSpan.remove();
+    }
   }
 }
 
@@ -1265,6 +1283,7 @@ function renderReviewsPanel(host) {
   const panel = el("div", "panel reviews-panel");
   panel.append(el("h3", null, "Your checks of ClearDraft's answers (this browser)"));
   panel.append(el("div", "sub", `You reviewed ${total} case${total === 1 ? "" : "s"}: ${confirmed} looked right, ${flagged} flagged as wrong`));
+  panel.append(el("div", "sub", `Today: ${reviewedTodayCount()} handled`));
   if (agreementDenom > 0) {
     panel.append(el("div", "reviews-agreement", `Agreement: ${Math.round((confirmed / agreementDenom) * 100)}%`));
   }
@@ -1609,16 +1628,112 @@ function renderBoardView() {
   if (!showEmpty) {
     updateTabCounts();
     renderBoard();
+    renderTriageBanner();
+  } else {
+    const banner = $("#triage-banner");
+    if (banner) { banner.hidden = true; banner.replaceChildren(); }
   }
+}
 
-  const doneLine = $("#done-count-line");
-  if (doneLine) {
-    const board = activeBoard();
-    const reviewedCount = board.filter((r) => isReviewed(r.email_id)).length;
-    const flaggedCount = board.filter((r) => { const rv = getReview(r.email_id); return rv && rv.verdict === "flagged"; }).length;
-    doneLine.hidden = reviewedCount <= 0;
-    if (reviewedCount > 0) doneLine.textContent = `${reviewedCount} reviewed · ${flaggedCount} flagged`;
+/* Every row still waiting on a person: a discrepancy or a needs-a-human
+   case that has not been reviewed yet. This is the whole triage queue —
+   "cleared" and "other" never need a clerk's judgement, so they never
+   belong here. Order follows the active board, same as renderBoard(). */
+function needsYouRows() {
+  return activeBoard().filter((r) => {
+    const t = tabOf(r);
+    return (t === "mismatch" || t === "needs_review") && !isReviewed(r.email_id);
+  });
+}
+
+/* How many reviews (across every board, sample or mine — the store is
+   shared) were made today, by local date. Backs both the triage banner's
+   done state and the accuracy page's reviews panel, so "today" never
+   means two different things in the same UI. */
+function reviewedTodayCount() {
+  const pad = (n) => String(n).padStart(2, "0");
+  const now = new Date();
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  let count = 0;
+  for (const id of Object.keys(REVIEWS)) {
+    const at = REVIEWS[id] && REVIEWS[id].at;
+    if (!at) continue;
+    const d = new Date(at);
+    if (Number.isNaN(d.getTime())) continue;
+    if (`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` === today) count++;
   }
+  return count;
+}
+
+/* The first thing a clerk should see: where to start, and how close to
+   finished the queue already is. Y (the denominator) is every mismatch or
+   needs-a-human case in the active board, reviewed or not, so the
+   progress bar reflects the whole queue rather than resetting each time a
+   case leaves it. */
+function renderTriageBanner() {
+  const banner = $("#triage-banner");
+  if (!banner) return;
+  banner.className = "triage";
+  banner.replaceChildren();
+
+  const relevant = activeBoard().filter((r) => { const t = tabOf(r); return t === "mismatch" || t === "needs_review"; });
+  const totalY = relevant.length;
+  if (totalY === 0) { banner.hidden = true; return; }
+  banner.hidden = false;
+
+  const rows = needsYouRows();
+  const count = rows.length;
+
+  if (count > 0) {
+    const mismatchLeft = rows.filter((r) => tabOf(r) === "mismatch").length;
+    const reviewLeft = count - mismatchLeft;
+    const handled = totalY - count;
+
+    const headline = el("div", "triage-headline");
+    headline.append(el("strong", null, `${count} need${count === 1 ? "s" : ""} you now`));
+    headline.append(document.createTextNode(
+      ` · ${mismatchLeft} discrepanc${mismatchLeft === 1 ? "y" : "ies"} · ${reviewLeft} need${reviewLeft === 1 ? "s" : ""} a human`
+    ));
+    banner.append(headline);
+
+    const row = el("div", "triage-row");
+    const startBtn = el("button", "btn btn-primary triage-start-btn", "Start");
+    startBtn.type = "button";
+    startBtn.addEventListener("click", startQueue);
+    row.append(startBtn);
+
+    const progWrap = el("div", "triage-progress-wrap");
+    const bar = document.createElement("progress");
+    bar.className = "triage-progress";
+    bar.max = totalY;
+    bar.value = handled;
+    progWrap.append(bar);
+    progWrap.append(el("span", "triage-progress-label", `${handled} of ${totalY} handled`));
+    row.append(progWrap);
+    banner.append(row);
+  } else {
+    // Every mismatch and needs-a-human case in this board is reviewed.
+    // Colour is never the only signal — the state is in the words too.
+    banner.classList.add("triage-clear");
+    banner.append(el("div", "triage-headline", "Nothing needs you right now."));
+    const t = reviewedTodayCount();
+    banner.append(el("div", "triage-done-note",
+      `You handled ${t} today — about ${t * 10} min of manual checking saved (estimate: up to 10 min per pair by hand).`));
+  }
+}
+
+/* Jump straight into the queue: discrepancies first (they are the ones
+   with a concrete answer waiting), needs-a-human only once every
+   discrepancy is cleared. Reuses the exact list-walking the case page
+   already relies on — this just aims it at the first case instead of
+   the next one. */
+function startQueue() {
+  const rows = needsYouRows();
+  if (!rows.length) return;
+  const tab = rows.some((r) => tabOf(r) === "mismatch") ? "mismatch" : "needs_review";
+  setTab(tab);
+  const first = rows.find((r) => tabOf(r) === tab);
+  if (first) navigateToCase(first.email_id);
 }
 
 function switchSource(s) {
