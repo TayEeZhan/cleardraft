@@ -96,6 +96,33 @@ via the table in [`core/aliases.py`](core/aliases.py), not by header text.
 
 Nothing is sent automatically. The person confirms, decides, edits, and sends.
 
+## Mark as same
+
+A signed-in clerk can teach ClearDraft that one specific SI/BL wording is the
+same, on any of the five text fields (`shipper`, `consignee`, `notify_party`,
+`port_of_loading`, `port_of_discharge` — never the two numeric fields, where
+a difference is always real). Click **Mark as same** on a mismatch row —
+either an inbox discrepancy row or a "Check a pair" result — confirm inline,
+and optionally add a short reason. From then on:
+
+- that exact pair, for that one field, clears itself on every future check
+  (order doesn't matter — "A same as B" also covers "B same as A");
+- it never generalises into a rule — only that one verified wording pair is
+  affected, never a pattern or a fuzzy match;
+- it's per account — one clerk's pair never changes what a colleague sees;
+- it's bounded and reversible: up to 500 pairs per account, undoable in one
+  click, from the row it cleared or from the pairs page;
+- a result already saved before the pair existed re-counts live, without
+  re-running the check — the inbox board, a saved case, and "Check a pair"
+  all update as soon as a pair is added, edited or undone;
+- the **organiser submission export never changes** — it always reflects the
+  originally checked result, because it exists to score the pipeline itself.
+
+Find every marked pair — search, filter by field, edit or undo — on the
+**Marked as same** page, linked from the top bar (with a count badge) and the
+account menu. Full design and trade-offs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+ADR-011.
+
 ## Export
 
 - **Discrepancy report (CSV)** — one row per mismatch: field, SI value, BL
@@ -111,7 +138,7 @@ the page.
 
 | What was tested | Result | Where to see it |
 |---|---|---|
-| Automated test suite | 269 tests (268 pass, 1 skipped), no network, no API key, no model calls | `tests/`, `python -m pytest tests/ -q` |
+| Automated test suite | 345 tests (344 pass, 1 skipped), no network, no API key, no model calls | `tests/`, `python -m pytest tests/ -q` |
 | Organiser corpus (520 emails, 250 attachments, 119 SI/BL pairs) | End-to-end score 1.0000, 46 of 46 planted discrepancies caught, full run in about 1.7s | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §9, **Accuracy** page |
 | Held-out set, written without reference to our rules (`data/challenge/`) | Category accuracy 67% → 100%, intent accuracy 50% → 100%, fields read under unfamiliar labels 2 of 41 → 41 of 41 (18 of 41 rules-only after later alias work); model decided 15 emails, 0 wrong, across 21 calls | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §9, `data/challenge/README.md` |
 | Every flow, checked live on the deployed site | Manual pass across home, inbox, check, accuracy, accounts | https://cleardraft-one.vercel.app |
@@ -190,7 +217,7 @@ no measured gain. `CLEARDRAFT_USE_MODEL=0` switches it off instantly.
 | Piece | Service |
 |---|---|
 | Website | Vercel, static files from `web/` |
-| API | One Vercel Python function (FastAPI, `api/index.py`): `/api/health`, `/api/check`, `/api/process-email`, `/api/auth/*`, `/api/mail*` |
+| API | One Vercel Python function (FastAPI, `api/index.py`): `/api/health`, `/api/check`, `/api/process-email`, `/api/auth/*`, `/api/mail*`, `/api/equivalences*` |
 | Accounts and saved mail | Upstash Redis through Vercel Storage; scrypt password hashes; HttpOnly, Secure session cookie |
 | Model | Anthropic API; key held in a Vercel environment variable |
 | Deploy | Every push to `main` deploys automatically |
@@ -222,7 +249,7 @@ later without changing the pipeline.
 agreed with ClearDraft, and flagged notes show which labels or rules need work.
 
 **Testing.**
-- 269 automated tests (268 pass, 1 skipped). They run with no network, no key and no model calls.
+- 345 automated tests (344 pass, 1 skipped). They run with no network, no key and no model calls.
 - The organiser's 520-email inbox: end-to-end score 1.0000, with 46 of 46 planted discrepancies caught.
 - A held-out set written without reference to our rules, to measure generalisation (see Success metrics).
 - Scripted end-to-end passes on the live site covering:
@@ -368,7 +395,7 @@ sends the two files to `POST /api/check` and runs the same pipeline on them.
 python -m pytest tests/ -q
 ```
 
-269 tests (268 pass, 1 skipped), with no network, no API key and no model
+345 tests (344 pass, 1 skipped), with no network, no API key and no model
 calls: the suite switches the model off so it is free and repeatable.
 `tests/test_contract.py` proves the plumbing rather than the accuracy: that all
 520 emails parse, that the submission record shape matches the organiser's
@@ -431,8 +458,10 @@ below for that.
 | `core/reply.py` | Template-filled draft reply. Never free model text | Ee Zhan |
 | `core/recheck.py` | Amended-draft re-check: fixed, still wrong, newly broken | Ee Zhan |
 | `core/pipeline.py` | The orchestrator, taking each stage as an injected callable | Ee Zhan |
+| `core/equivalence.py` | "Mark as same" — pure rule for learned pairs (ADR-011) | Sheng Kuan |
 | `adapters/` | Everything that touches the outside world (model, inbox) | Ee Zhan |
 | `api/index.py` | FastAPI on Vercel: `/api/health`, `/api/check` | Ee Zhan |
+| `api/_equivalences.py` | "Mark as same" routes and live re-evaluation | Sheng Kuan |
 | `web/` | The website: plain HTML, CSS and JavaScript, no build step | Ee Zhan |
 | `scripts/` | Batch run, UI snapshot export, held-out challenge run | — |
 | `eval/` | The scoring harness | Zi Qi |

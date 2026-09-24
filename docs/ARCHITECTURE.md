@@ -70,6 +70,12 @@ it. Nothing in the repository can send mail.
 the core. That is what lets `tests/test_contract.py` exercise the whole
 pipeline without a network, an API key or a dataset.
 
+Learned equivalences (ADR-011) is one more router in `api/` (`_equivalences.py`)
+and one more pure module in `core/` (`equivalence.py`) — no new container.
+It reuses `adapters/store.py`'s existing `Store` protocol under a new key,
+`equiv:{email}`, the same way `api/_accounts.py` already stores mail; no new
+storage backend was added.
+
 ---
 
 ## 4. Components and data flow
@@ -118,6 +124,32 @@ Three things fall out of that signature, and each maps to a scored criterion:
 `scripts/run_pipeline.py` demonstrates the first point today: unimplemented
 stages fall back to a safe default and are counted, so the plumbing was
 provably correct before any feature code existed.
+
+**The live evaluate flow (ADR-011) runs alongside this, not through it.** A
+case already produced by the pipeline above (saved in a mailbox, or the
+board's snapshot) is re-projected — never re-classified, re-extracted, or
+re-passed through `core/decide.py` — by `core/equivalence.py:evaluate_case`
+against the signed-in account's current pairs:
+
+```
+  saved/checked case (JSON)      web/app.js: buildCaseForEval
+    |
+    v
+  POST /api/equivalences/evaluate   api/_equivalences.py
+    |  pair_index = build_pair_index(account's pairs)
+    v
+  evaluate_case(case, pair_index)   core/equivalence.py   pure, stateless
+       effective status/defect_fields, covered rows, covered recheck rows
+    |
+    +-- draft:true, changed ------> draft_reply / draft_recheck_reply
+    |                                (core/reply.py, unchanged)
+    v
+  {cases: [...]}                  cached client-side in EVAL_CACHE
+```
+
+Nothing here writes back to storage: removing or editing a pair automatically
+un-covers whatever it used to cover on the very next call, since the
+evaluation is derived fresh each time rather than stored.
 
 ---
 
@@ -280,14 +312,22 @@ port_of_loading, port_of_discharge; never `container_count` or
 `gross_weight_kg`, where a numeric difference is always a real defect), only
 when the row is not `undecidable`, and only for the exact normalised pair a
 signed-in clerk approved, order-independent (`core/equivalence.py:pair_key`).
-A new router, `api/_equivalences.py`, exposes `GET/POST/DELETE
-/api/equivalences`, gated on `current_user()` the same way `api/_accounts.py`
-gates mail; `api/index.py` passes `known_equal=lookup_for(request)` at both of
-its `compare()` call sites. The web UI (`web/app.js`) adds a "Mark as same"
-button on an eligible mismatch row with an inline (never `window.confirm`)
-confirm step, a "Matched via a pair you approved" chip with Undo on a row
-that came back `learned: true`, and a "Learned pairs" list with Undo on the
-account page.
+A new router, `api/_equivalences.py`, exposes `GET/POST/PATCH/DELETE
+/api/equivalences[/{id}]` plus `POST /api/equivalences/evaluate` (below),
+gated on `current_user()` the same way `api/_accounts.py` gates mail;
+`api/index.py` passes `known_equal=lookup_for(request)` at both of its
+`compare()` call sites. The web UI (`web/app.js`) adds a "Mark as same"
+button on an eligible mismatch row — on an inbox discrepancy row and on the
+"Check a pair" result alike — with an inline (never `window.confirm`) confirm
+step and an optional reason. Every covered row — marked just now, or one
+that came back `learned: true` from the check — is folded into a highlighted
+"Marked as same (n)" group, labelled "Marked as same by you · date · from
+<reference> · reason" with Undo and Edit. Reached from a top-bar shortcut (a count badge,
+label shortened to "Marked" under ~860px) and from the account menu, a
+dedicated `#/learned` page (search, field filter, "N of 500" usage, edit,
+remove/restore, `#/learned/<id>` deep link) is the one place to manage saved
+pairs; the account page itself now shows only a one-line summary plus a link
+to it, not an inline list.
 
 **Amendment (live re-count, reasons, management page).** A pair can now
 carry an optional reason (`note`, ≤280 chars) and be edited after the fact
@@ -348,6 +388,11 @@ pair's inline edit form.
   hides; checks run exactly as they do today. A `known_equal` that raises for
   any other reason is caught inside `compare()` and treated as no-match, never
   as a crash.
+- "Check a pair" (`#/check`) re-runs the evaluate call and redraws its result
+  after every Mark-as-same/Undo/Edit on that page (`web/app.js:
+  refreshCheckResult`), deliberately uncached and run even with zero pairs on
+  the account — a check has no board/detail entry to cache against, and
+  undoing the account's last covering pair must still visibly revert the row.
 - Bounded and reversible: at most 500 pairs per account, each value at most
   200 characters, every pair attributed (who, when, source) and undoable in
   one click, both from the row it cleared and from the account page.
@@ -372,6 +417,7 @@ failure path converges on escalation to a person.
 | New document format | no adapter registered | `kind="OTHER"`, escalate |
 | Email nobody can classify — no rule matched, and the model was unavailable or its own answer failed verification | `core/decide.py`: `intent == "unknown" and confidence == 0.0` | `NEEDS_REVIEW / unclassified` — ours, not the organiser's four reasons; never fires on the sample inbox, exists for unseen mail |
 | PDF label text overflows into the value column and the text extractor interleaves the two runs of glyphs | `core/parsers/pdf.py:_looks_interleaved` | field returned blank rather than a merged wrong value; the comparison row is `undecidable` rather than a false mismatch |
+| `POST /api/equivalences/evaluate` fails or times out (network, a too-large chunk, storage hiccup) | `evaluateBoardBatch`/`postEvaluate` catch and return `[]`/`null` | the inbox board silently keeps that case's checked result (no live re-count applied); the "Check a pair" page shows a toast — "Saved. Run the check again to see it applied." — since the pair itself was saved even though the re-count could not be shown |
 
 Two invariants enforce this, and both are checkable by reading the code:
 
@@ -444,6 +490,9 @@ that counter actually says after a full 520-email run, not a projection.
 | Untrusted document content | documents are parsed as data. No `eval`, no shell, no deserialisation of document content |
 | Prompt injection from an email body | the model never receives authority to act. Its only outputs are a category label and a field value, and the field value must survive `verify_against_source` |
 | Sending mail | not implemented anywhere. The system drafts; a person sends |
+| Learned pairs, cross-account access | every equivalences route reads `email` from `current_user(request)` and scopes storage to `equiv:{email}`; there is no cross-account lookup path. Signed out: `401 not_signed_in`. Another account's pair id: `404 not_found` (`api/_equivalences.py`), not a 403 that would confirm the id exists |
+| Learned pairs, oversized or malformed input | `MAX_INPUT_LENGTH` (2000), `MAX_VALUE_LENGTH` (200, post-normalisation), `MAX_NOTE_LENGTH` (280) and `MAX_PAIRS_PER_ACCOUNT` (500) on write; `POST /api/equivalences/evaluate` caps at `MAX_EVALUATE_CASES` (600), 7 rows per case and `MAX_EVALUATE_BODY_CHARS` (20,000) — all `400`, never a truncated silent accept |
+| Learned pairs, rendering user-supplied wording/notes | `web/app.js`'s marked-row labels and `#/learned` page set `textContent`, never `innerHTML`, so a pasted value containing HTML/script renders as plain text |
 
 ---
 
@@ -537,6 +586,15 @@ Three layers, deliberately separated so that a failure tells you where to look.
 | Unit | `tests/test_*.py` | Does one normaliser do the right thing on one awkward value? |
 | Evaluation | `eval/score.py` | What does the organiser's own scorer say? |
 
+Learned equivalences has its own two files, at the two seams ADR-011 draws:
+`tests/test_equivalence.py` (37 tests) exercises the pure core — `pair_key`,
+`make_lookup`, `can_learn`, `build_pair_index`, `evaluate_case` — with no
+store and no request; `tests/test_equivalences_api.py` (39 tests) exercises
+the FastAPI routes end to end (auth gating, the caps above, 409 duplicates on
+`PATCH`, `evaluate`'s chunking-relevant caps) against `MemoryStore`.
+`python -m pytest tests/ -q` currently reports 345 tests (344 passed, 1
+skipped).
+
 The contract layer earned its place immediately: it caught a real bug in
 `normalise_label` before any feature code existed. A bilingual label stripped
 to `gross weight ( kgs)`, which matched no alias. The bracket canonicalisation
@@ -563,10 +621,13 @@ core/            pure domain logic, no I/O
   reply.py       draft generation             Ee Zhan
   recheck.py     re-check an amended draft    Ee Zhan
   pipeline.py    the orchestrator             Ee Zhan
+  equivalence.py learned pairs: pure rule     Sheng Kuan
+                 and eligibility (ADR-011)
 adapters/        everything touching the outside world
   inbox.py       LocalInbox, HttpInbox
   model.py       the one door every model call passes through
 api/             FastAPI transport, Vercel Python serverless function
+  _equivalences.py  learned-pairs routes + evaluate (ADR-011)
 web/             static HTML + CSS + one ES module, no build step
 eval/            the scoring harness
 tests/           contract and unit tests
