@@ -17,6 +17,8 @@ Routes:
     POST /api/process-dataset  - upload a .zip bundle (inbox/*.json +
                                   attachments/*) and run the whole batch
                                   pipeline over it live: see api/_dataset.py
+    POST /api/scan              - transcribe a photo of an SI/BL/email into
+                                  editable text; see api/_ocr.py
     /api/auth/*, /api/mail*    - accounts: see api/_accounts.py
 
 Accounts note: /api/auth/* and /api/mail* are owned by api/_accounts.py and
@@ -48,6 +50,7 @@ from adapters.store import StoreError, get_store  # noqa: E402
 from api._accounts import current_user, router as accounts_router, save_result_to_mailbox  # noqa: E402
 from api._dataset import router as dataset_router  # noqa: E402
 from api._equivalences import lookup_for, router as equivalences_router  # noqa: E402
+from api._ocr import router as ocr_router  # noqa: E402
 from core import parsers  # noqa: E402
 from core.classify import classify  # noqa: E402
 from core.compare import compare  # noqa: E402
@@ -61,6 +64,7 @@ app = FastAPI()
 app.include_router(accounts_router)
 app.include_router(equivalences_router)
 app.include_router(dataset_router)
+app.include_router(ocr_router)
 
 
 @app.exception_handler(StoreError)

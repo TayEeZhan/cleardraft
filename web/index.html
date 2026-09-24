@@ -10,6 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="scan.css">
 </head>
 <body>
 
@@ -97,6 +98,7 @@
         <button type="button" class="switch-btn" id="addmail-tab-drop" role="tab" aria-selected="true">Drop .eml files</button>
         <button type="button" class="switch-btn" id="addmail-tab-paste" role="tab" aria-selected="false">Paste an email</button>
         <button type="button" class="switch-btn" id="addmail-tab-dataset" role="tab" aria-selected="false">Upload a dataset (.zip)</button>
+        <button type="button" class="switch-btn" id="addmail-tab-scan" role="tab" aria-selected="false">Scan a photo</button>
       </div>
 
       <div class="addmail-section" id="addmail-drop">
@@ -143,6 +145,10 @@
           <input type="file" id="dataset-file-input" class="drop-input" accept=".zip,application/zip">
         </div>
       </div>
+
+      <!-- Populated entirely by web/scan.js ("Scan a document (photo)") — see
+           that file for the intake UI, draft review and submit flow. -->
+      <div class="addmail-section" id="addmail-scan" hidden></div>
     </div>
 
     <p class="mine-privacy" id="mine-privacy-line" hidden></p>
@@ -340,5 +346,6 @@
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script type="module" src="app.js"></script>
+<script src="scan.js" defer></script>
 </body>
 </html>

@@ -1,0 +1,139 @@
+/* ClearDraft — "Scan a document (photo)" intake tab (web/scan.js).
+   Mobile-first: written and checked at 375px first, then widened. Reuses
+   the shared tokens and component classes from styles.css (--rule, --r,
+   .field-label, .field-input, .btn, .btn-primary, .link-btn,
+   .account-error) rather than redefining them, so this panel matches the
+   rest of the site without duplicating its design tokens. */
+
+.scan-intro {
+  margin: 0 0 14px;
+  color: var(--ink-2);
+  max-width: 60ch;
+}
+
+/* Adding a 4th "Scan a photo" tab pushes styles.css's .addmail-tabs
+   (display: inline-flex, no wrap) past 375px, which drags the WHOLE page
+   into horizontal scroll on a phone. Fixed here, additively, rather than
+   editing styles.css's shared rule directly: below 480px the tab row wraps
+   onto two lines instead of overflowing sideways. */
+@media (max-width: 639px) {
+  .addmail-tabs { display: flex; flex-wrap: wrap; }
+}
+
+/* ── Drop zone (same shape as .drop-zone-large elsewhere, kept local so
+   this file never depends on styles.css's internal selectors changing). */
+.scan-drop-zone {
+  position: relative;
+  background: var(--surface);
+  border: 1px dashed var(--rule-2);
+  border-radius: var(--r);
+  transition: border-color .12s, background-color .12s;
+  margin-bottom: 14px;
+}
+.scan-drop-zone[data-drag="true"] { border-color: var(--marine); background: var(--surface-2); }
+.scan-drop-zone .drop-label {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 32px 20px; cursor: pointer; text-align: center; align-items: center;
+  min-height: 44px;
+}
+.scan-drop-zone:focus-within { outline: 2px solid var(--marine); outline-offset: 2px; border-radius: var(--r); }
+
+.scan-progress {
+  font-family: var(--mono); font-size: 12.5px; color: var(--ink-3);
+  min-height: 1.2em; margin: 0 0 10px;
+}
+
+/* ── One card per photo. Thumbnail stacks ABOVE the draft on every width —
+   this is a review task (compare photo to text line by line), not a
+   gallery, so a side-by-side layout that squeezes either one narrow would
+   work against the one thing this screen exists for. ── */
+.scan-items {
+  display: flex; flex-direction: column; gap: 16px;
+  margin-bottom: 18px;
+}
+.scan-item {
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: var(--r); padding: 14px;
+}
+
+.scan-thumb-wrap { display: flex; justify-content: center; }
+.scan-thumb {
+  display: block; max-width: 100%; max-height: 320px;
+  width: auto; height: auto; object-fit: contain;
+  border-radius: 4px; border: 1px solid var(--rule);
+  background: var(--surface-2);
+}
+.scan-thumb-empty {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; min-height: 120px; color: var(--ink-3);
+  font-size: 12.5px; border: 1px dashed var(--rule-2); border-radius: 4px;
+}
+
+.scan-item-body { display: flex; flex-direction: column; gap: 8px; }
+.scan-item-status {
+  font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+}
+.scan-item-status-error { color: var(--mismatch); }
+.scan-item-status-done { color: var(--match); }
+
+.scan-textarea {
+  min-height: 160px;
+  /* Comfortable with the on-screen phone keyboard: a fixed viewport-relative
+     max-height would fight the keyboard's own resize of the visual
+     viewport, so this just gives room to grow and lets the page scroll. */
+  width: 100%;
+}
+
+.scan-warning {
+  font-size: 12.5px; color: var(--mismatch); background: var(--mismatch-bg);
+  border: 1px solid #F0C3BF; border-radius: var(--r); padding: 8px 10px;
+}
+.scan-warning[hidden] { display: none; }
+
+.scan-item-note {
+  font-size: 12px; color: var(--ink-3); margin: 0; max-width: 60ch;
+}
+
+.scan-doctype {
+  border: 1px solid var(--rule); border-radius: var(--r);
+  padding: 10px 12px; margin: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.scan-doctype legend {
+  font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 0 4px;
+}
+.scan-doctype-invalid { border-color: var(--mismatch); }
+.scan-doctype-opt {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13.5px; color: var(--ink);
+  min-height: 44px; cursor: pointer;
+}
+.scan-doctype-opt input[type="radio"] {
+  width: 20px; height: 20px; flex: 0 0 auto;
+}
+
+.scan-remove-btn { align-self: flex-start; min-height: 44px; }
+
+.scan-actions {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+}
+.scan-actions[hidden] { display: none; }
+.scan-actions .btn { width: 100%; }
+
+/* ── Case page note ("Text from a photo, checked by you") — injected by
+   web/scan.js into #review-body without editing app.js's render code. ── */
+.scan-photo-note {
+  display: inline-block;
+  font-size: 12.5px; color: var(--ink-2); background: var(--surface-2);
+  border: 1px solid var(--rule); border-radius: var(--r);
+  padding: 6px 10px; margin: 0 0 14px;
+}
+
+/* ── Wider screens: the confirm button no longer needs to fill the row,
+   and the thumbnail can sit a little larger without crowding the draft
+   below it — still stacked, per the design note above. ── */
+@media (min-width: 640px) {
+  .scan-actions .btn { width: auto; min-width: 220px; }
+  .scan-thumb { max-height: 420px; }
+}

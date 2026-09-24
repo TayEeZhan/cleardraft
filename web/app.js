@@ -3296,6 +3296,11 @@ function setAddMailTab(tab) {
   $("#addmail-paste").hidden = tab !== "paste";
   const datasetSection = $("#addmail-dataset");
   if (datasetSection) datasetSection.hidden = tab !== "dataset";
+  // "Scan a photo" — the panel itself is owned and populated by
+  // web/scan.js; this file only knows how to show/hide it, same as the
+  // dataset tab above.
+  const scanSection = $("#addmail-scan");
+  if (scanSection) scanSection.hidden = tab !== "scan";
 }
 
 function initAddMailTabs() {
@@ -3303,6 +3308,8 @@ function initAddMailTabs() {
   $("#addmail-tab-paste").addEventListener("click", () => { ADDMAIL_TAB_TOUCHED = true; setAddMailTab("paste"); });
   const datasetTab = $("#addmail-tab-dataset");
   if (datasetTab) datasetTab.addEventListener("click", () => { ADDMAIL_TAB_TOUCHED = true; setAddMailTab("dataset"); });
+  const scanTab = $("#addmail-tab-scan");
+  if (scanTab) scanTab.addEventListener("click", () => { ADDMAIL_TAB_TOUCHED = true; setAddMailTab("scan"); });
 }
 
 function resetPasteForm() {
@@ -3384,6 +3391,30 @@ function initPasteForm() {
   const bodyInput = $("#paste-body");
   if (bodyInput) bodyInput.addEventListener("input", clearPasteBodyError);
 }
+
+/* Hook for web/scan.js ("Scan a document (photo)"): once the clerk has
+   checked and edited the AI-read text and presses "Text looks right —
+   check it", scan.js hands the subject/body/files here so the result goes
+   through the exact same /api/process-email call and Your-mail merge as
+   "Paste an email" (submitProcessEmail, mergeMineResult,
+   persistMineIfLocal, renderBoardView) — the two intake paths can never
+   show different results for the same email. Kept as one small,
+   additive, window-exposed function rather than duplicating any of this
+   logic in scan.js, which is a plain script and cannot import this
+   module's private functions directly.
+   Throws the same { missingApi: true } / { detail } shapes
+   submitProcessEmail throws; scan.js is responsible for displaying those. */
+window.clearDraftSubmitScan = async function clearDraftSubmitScan({ subject, body, files }) {
+  const fd = new FormData();
+  if (subject) fd.append("subject", subject);
+  fd.append("body", body || "");
+  for (const f of files || []) fd.append("files", f);
+  const data = await submitProcessEmail(fd);
+  const wasDuplicate = mergeMineResult(data);
+  persistMineIfLocal();
+  renderBoardView();
+  return { data, wasDuplicate };
+};
 
 /* ── Accounts ───────────────────────────────────────────────────
    Entirely optional: GET /api/auth/me tells us on boot whether accounts

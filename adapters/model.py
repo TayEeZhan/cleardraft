@@ -13,6 +13,7 @@ nothing here.
 """
 from __future__ import annotations
 
+import base64
 import contextvars
 import json
 import os
@@ -249,3 +250,123 @@ def complete_json(prompt: str, *, schema_hint: str, max_tokens: int = 512) -> di
 
     STATS.failures += 1
     raise ModelUnavailable(f"model call failed after retry: {last}") from last
+
+
+#: Instructions for transcribe_image: read every line verbatim, keep
+#: side-by-side "Label: value" pairs on one line, never correct/translate/
+#: summarise/invent, mark illegible parts, plain text only. This is a
+#: READING aid, not a decision - the human review step in the UI (see
+#: web/scan.js) is the verification gate for everything this returns,
+#: the same way verify_against_source() gates complete_json's answers
+#: against the source document.
+_TRANSCRIBE_PROMPT = (
+    "Transcribe ALL text in this image verbatim, line by line, exactly as it "
+    "appears in the photo. Where the layout shows a label and its value side "
+    "by side (for example \"Consignee: ACME CO\", or a label in one column "
+    "and its value in the next), keep that label and value together on one "
+    "line, in reading order. Do not correct spelling, do not translate, do "
+    "not summarise, and do not add any text that is not visibly in the "
+    "image. Write [unreadable] in place of any part you cannot read. Output "
+    "plain text only - no markdown formatting, no commentary, no headings "
+    "you did not read from the image."
+)
+
+
+def transcribe_image(image_bytes: bytes, media_type: str) -> str:
+    """Read every line of text off a photo, verbatim. Never corrects,
+    translates, summarises or invents anything; illegible parts come back
+    as "[unreadable]".
+
+    Used by POST /api/scan (api/_ocr.py), the "Scan a document (photo)"
+    intake path: a clerk photographs an SI or draft BL, this reads the
+    text, and the clerk then checks and edits every line before anything
+    derived from it enters the pipeline. That review step - not this
+    function - is the verification gate here; unlike complete_json's
+    answers, a transcription never passes through
+    core/extract.py:verify_against_source, because it never becomes a
+    FieldValue on its own. It becomes plain text a human has already
+    confirmed.
+
+    Same single door as complete_json: honours available() and the
+    per-request _BUDGET contextvar the same way (read, never mutated here
+    except via the shared decrement below), constructs the client the same
+    way (same MODEL, same call_timeout capped to the budget's remaining
+    deadline, max_retries=0), counts STATS.calls/input_tokens/output_tokens
+    the same way, and raises ModelUnavailable on any failure - callers must
+    treat that as "cannot read this photo right now", never as a guess at
+    what it says.
+    """
+    if not available():
+        raise ModelUnavailable("ANTHROPIC_API_KEY is not configured")
+    try:
+        import anthropic
+    except ImportError as exc:
+        raise ModelUnavailable(f"anthropic SDK not installed: {exc}") from exc
+
+    image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+
+    budget = _BUDGET.get()
+    last: "Exception | None" = None
+    for attempt in (1, 2):
+        # Re-checked every attempt, not just once up front - see
+        # complete_json's identical comment: a budgeted caller's deadline
+        # or attempt count can run out between attempt 1 and attempt 2.
+        if not available():
+            break
+
+        call_timeout = 20.0
+        if budget is not None:
+            remaining = budget[1] - time.monotonic()
+            if remaining <= 0:
+                break
+            call_timeout = min(call_timeout, remaining)
+            # Every ATTEMPT counts against the budget, success or failure -
+            # same reasoning as complete_json.
+            budget[0] -= 1
+
+        client = anthropic.Anthropic(
+            api_key=os.environ["ANTHROPIC_API_KEY"], timeout=call_timeout, max_retries=0
+        )
+        try:
+            resp = client.messages.create(
+                model=MODEL,
+                max_tokens=2000,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": image_b64,
+                                },
+                            },
+                            {"type": "text", "text": _TRANSCRIBE_PROMPT},
+                        ],
+                    }
+                ],
+            )
+            STATS.calls += 1
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                STATS.input_tokens += getattr(usage, "input_tokens", 0) or 0
+                STATS.output_tokens += getattr(usage, "output_tokens", 0) or 0
+            text = "".join(
+                getattr(block, "text", "") for block in getattr(resp, "content", [])
+            )
+            return text.strip()
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
+                anthropic.BadRequestError, anthropic.NotFoundError) as exc:
+            # Not transient - see complete_json's identical comment.
+            last = exc
+            break
+        except Exception as exc:
+            last = exc
+            if attempt == 2:
+                break
+            time.sleep(1)  # a brief pause before the one retry, not a backoff chain
+
+    STATS.failures += 1
+    raise ModelUnavailable(f"image transcription failed after retry: {last}") from last
