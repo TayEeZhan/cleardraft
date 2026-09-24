@@ -212,6 +212,26 @@ function buildCaseForEval(d) {
   return out;
 }
 
+/* Shared fetch for a single-case, draft evaluation: posts to
+   /api/equivalences/evaluate and returns the one evaluated case, or null on
+   any failure (non-OK response, network error, malformed body). No caching
+   here — callers that want caching (evaluateCaseLive) wrap this themselves. */
+async function postEvaluate(caseObj) {
+  try {
+    const r = await fetch("/api/equivalences/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ cases: [caseObj], draft: true }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return (j.cases && j.cases[0]) || null;
+  } catch {
+    return null;
+  }
+}
+
 /* Evaluates one saved case live, with a redrafted reply when it changed.
    Returns null when there is nothing to evaluate (signed out, no pairs,
    the endpoint failed) — every caller treats that exactly like "no
@@ -220,21 +240,28 @@ async function evaluateCaseLive(id, source, d) {
   if (!ACCOUNT.user || !PAIRS.length) return null;
   const cache = EVAL_CACHE[source] || EVAL_CACHE.mine;
   if (cache.has(id)) return cache.get(id);
-  try {
-    const r = await fetch("/api/equivalences/evaluate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({ cases: [buildCaseForEval(d)], draft: true }),
-    });
-    if (!r.ok) return null;
-    const j = await r.json();
-    const ev = (j.cases && j.cases[0]) || null;
-    if (ev) cache.set(id, ev);
-    return ev;
-  } catch {
-    return null;
-  }
+  const ev = await postEvaluate(buildCaseForEval(d));
+  if (ev) cache.set(id, ev);
+  return ev;
+}
+
+/* Live-evaluates a "Check a pair" result against the account's current
+   pairs. Unlike evaluateCaseLive:
+   - never cached — a check result is one-off (there is no board/detail
+     entry keyed by email_id to cache against), and it must reflect the
+     latest pairs every time it's asked for, including right after a pair
+     was just added or removed.
+   - never short-circuits on an empty PAIRS list. evaluate_case (server
+     side) recomputes each row from its raw SI/BL values against whatever
+     pairs the account currently has, rather than trusting the case's own
+     stale `matched` flag — so calling it with zero pairs is exactly what
+     correctly reverts a row to "discrepancy" after the last covering pair
+     is undone. Only a missing signed-in user still short-circuits, since
+     the endpoint requires one. */
+async function evaluateCheckLive(d) {
+  if (!ACCOUNT.user) return null;
+  const withId = d.email_id ? d : { ...d, email_id: "check" };
+  return postEvaluate(buildCaseForEval(withId));
 }
 
 /* Batch-evaluates the board's candidate cases (currently MISMATCH, or any
@@ -2067,7 +2094,7 @@ function showCheckError(message) {
   host.append(panel);
 }
 
-function renderCheckResult(data) {
+function renderCheckResult(data, evaluation = null) {
   const host = checkResultHost();
   host.replaceChildren();
 
@@ -2083,7 +2110,24 @@ function renderCheckResult(data) {
 
   host.append(printButton());
 
-  renderVerdict(data, host);
+  renderVerdict(data, host, { evaluation, rerender: () => refreshCheckResult(data) });
+}
+
+/* Re-renders a "Check a pair" result after Mark as same / Undo changes what
+   the account's pairs cover — this is the check page's equivalent of
+   renderReview's rerender, so seamTable's onSaved/Undo callbacks actually do
+   something instead of leaving the row exactly as it was checked. */
+async function refreshCheckResult(data) {
+  const scrollY = window.scrollY;
+  const evaluation = await evaluateCheckLive(data);
+  if (!evaluation && PAIRS.length) {
+    // The mark/undo itself already succeeded — only the live re-evaluation
+    // failed (network hiccup) — so say so rather than silently rendering as
+    // if nothing had happened.
+    toast("Saved. Run the check again to see it applied.");
+  }
+  renderCheckResult(data, evaluation);
+  window.scrollTo(0, scrollY);
 }
 
 async function runCheck() {
