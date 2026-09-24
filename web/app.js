@@ -23,6 +23,53 @@ let UPLOADING = false;
    GET /api/auth/me answers; once it is false, the account control stays
    hidden for the rest of the session. */
 let ACCOUNT = { available: null, user: null };
+
+/* Learned equivalences ("marked as same"). PAIRS mirrors GET
+   /api/equivalences for the signed-in account; EVAL_CACHE holds the result
+   of POST /api/equivalences/evaluate per source, keyed by email_id, so a
+   case view and the board never issue duplicate requests for the same
+   case. Both are cleared on sign-out and whenever a pair is created,
+   edited or removed — the one rule is re-applied fresh after every change. */
+let PAIRS = [];
+const EVAL_CACHE = { mine: new Map(), sample: new Map() };
+const MAX_PAIRS = 500;
+
+function invalidateEvalCache() {
+  EVAL_CACHE.mine.clear();
+  EVAL_CACHE.sample.clear();
+  BOARD_BATCH_TRIED = { mine: false, sample: false };
+}
+
+async function loadPairs() {
+  if (!ACCOUNT.user) { PAIRS = []; invalidateEvalCache(); return; }
+  try {
+    const r = await fetch("/api/equivalences", { credentials: "same-origin" });
+    if (r.ok) {
+      const j = await r.json();
+      PAIRS = (j && j.pairs) || [];
+    } else {
+      PAIRS = [];
+    }
+  } catch {
+    PAIRS = [];
+  }
+  invalidateEvalCache();
+  renderLearnedShortcut();
+}
+
+/* Keeps the topbar "Marked as same" shortcut's count badge in sync with
+   PAIRS — hidden with zero pairs, otherwise showing the live count. */
+function renderLearnedShortcut() {
+  const link = document.getElementById("learned-shortcut");
+  const count = document.getElementById("learned-shortcut-count");
+  if (!link || !count) return;
+  const n = PAIRS.length;
+  count.textContent = String(n);
+  count.hidden = n === 0;
+  link.setAttribute("aria-label", n > 0 ? `Marked as same, ${n} pair${n === 1 ? "" : "s"}` : "Marked as same");
+}
+
+function pairById(id) { return PAIRS.find((p) => p.id === id) || null; }
 let ACCOUNT_MODE = "signup"; // "signup" | "signin" — #/account form mode
 let ADDMAIL_TAB = "drop";    // "drop" | "paste" — which add-mail tab shows
 let ADDMAIL_TAB_TOUCHED = false; // has the visitor picked a tab themselves this session?
@@ -135,15 +182,161 @@ function activeBoard() { return SRC === "mine" ? MINE.board : DATA.board; }
 
 function lookupDetail(id) { return MINE.detail[id] || (DATA && DATA.detail[id]); }
 
+/* Shapes a saved-case detail object into what POST /api/equivalences/
+   evaluate expects: the fields it reads (email_id, from, subject, body,
+   category, status, review_reason, defect_fields, decided_by, comparisons,
+   recheck) and nothing more sensitive than that. */
+function buildCaseForEval(d) {
+  const comparisons = (d.comparisons || []).map((c) => ({
+    field: c.field,
+    si: c.si ? { value: c.si.value, raw: c.si.raw, line_no: c.si.line_no, label: c.si.label, decided_by: c.si.decided_by } : null,
+    bl: c.bl ? { value: c.bl.value, raw: c.bl.raw, line_no: c.bl.line_no, label: c.bl.label, decided_by: c.bl.decided_by } : null,
+    matched: Boolean(c.matched),
+    undecidable: Boolean(c.undecidable),
+  }));
+  const out = {
+    email_id: d.email_id,
+    from: d.from || "",
+    subject: d.subject || "",
+    body: d.body || "",
+    category: d.category,
+    status: d.status,
+    review_reason: d.review_reason,
+    defect_fields: d.defect_fields || [],
+    decided_by: d.decided_by,
+    comparisons,
+  };
+  if (d.recheck && Array.isArray(d.recheck.rows)) {
+    out.recheck = { rows: d.recheck.rows.map((r) => ({ field: r.field, si: r.si, v1: r.v1, v2: r.v2, outcome: r.outcome })) };
+  }
+  return out;
+}
+
+/* Evaluates one saved case live, with a redrafted reply when it changed.
+   Returns null when there is nothing to evaluate (signed out, no pairs,
+   the endpoint failed) — every caller treats that exactly like "no
+   evaluation available yet" and falls back to the checked result. */
+async function evaluateCaseLive(id, source, d) {
+  if (!ACCOUNT.user || !PAIRS.length) return null;
+  const cache = EVAL_CACHE[source] || EVAL_CACHE.mine;
+  if (cache.has(id)) return cache.get(id);
+  try {
+    const r = await fetch("/api/equivalences/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ cases: [buildCaseForEval(d)], draft: true }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const ev = (j.cases && j.cases[0]) || null;
+    if (ev) cache.set(id, ev);
+    return ev;
+  } catch {
+    return null;
+  }
+}
+
+/* Batch-evaluates the board's candidate cases (currently MISMATCH, or any
+   row whose stored comparisons already carry a learned:true field) for the
+   given source, so the board's tabs/counts/tags can reflect marked pairs
+   without a request per row. Any failure leaves the cache untouched — the
+   board then silently falls back to checked results, per the plan. */
+let BOARD_BATCH_TRIED = { mine: false, sample: false };
+
+/* The server caps the WHOLE evaluate request at MAX_EVALUATE_BODY_CHARS
+   (api/_equivalences.py: 20,000 characters for json.dumps(cases), not per
+   case) - an inbox board can easily hold 40+ MISMATCH cases, and each one
+   carries its full email body, so one request for the whole board reliably
+   blows that cap and comes back 400 body_too_large. evaluateBoardBatch used
+   to send exactly one such request and treat a non-OK response as "nothing
+   to apply", which is why marking a pair never moved anything on the board:
+   the batch call failed every time, silently. Chunking keeps each request
+   comfortably under the cap; a generous safety margin below 20,000 absorbs
+   the outer {cases, draft} JSON wrapper and per-request variance. */
+const EVAL_BATCH_CHAR_BUDGET = 16000;
+
+function chunkCasesByBudget(cases) {
+  const chunks = [];
+  let chunk = [];
+  let chars = 2; // "[]"
+  for (const c of cases) {
+    const size = JSON.stringify(c).length + 1;
+    if (chunk.length && chars + size > EVAL_BATCH_CHAR_BUDGET) {
+      chunks.push(chunk);
+      chunk = [];
+      chars = 2;
+    }
+    chunk.push(c);
+    chars += size;
+  }
+  if (chunk.length) chunks.push(chunk);
+  return chunks;
+}
+
+async function postEvaluateChunk(cases, draft) {
+  try {
+    const r = await fetch("/api/equivalences/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ cases, draft }),
+    });
+    if (!r.ok) return [];
+    const j = await r.json();
+    return j.cases || [];
+  } catch {
+    return [];
+  }
+}
+
+async function evaluateBoardBatch(source) {
+  if (!ACCOUNT.user || !PAIRS.length) return false;
+  if (BOARD_BATCH_TRIED[source]) return false;
+  const board = source === "mine" ? MINE.board : (DATA ? DATA.board : []);
+  const cache = EVAL_CACHE[source];
+  const candidateDetails = [];
+  for (const row of board) {
+    if (cache.has(row.email_id)) continue;
+    const detail = source === "mine" ? MINE.detail[row.email_id] : DATA && DATA.detail[row.email_id];
+    if (!detail) continue;
+    const hasLearnedRow = (detail.comparisons || []).some((c) => c.learned);
+    if (row.status === "MISMATCH" || hasLearnedRow) candidateDetails.push(detail);
+  }
+  BOARD_BATCH_TRIED[source] = true;
+  if (!candidateDetails.length) return false;
+
+  const cases = candidateDetails.slice(0, 600).map(buildCaseForEval);
+  const chunks = chunkCasesByBudget(cases);
+  const results = await Promise.all(chunks.map((chunk) => postEvaluateChunk(chunk, false)));
+
+  let changed = false;
+  for (const evs of results) {
+    for (const ev of evs) if (ev && ev.email_id) { cache.set(ev.email_id, ev); changed = true; }
+  }
+  return changed; /* any chunk that failed just leaves its cases uncached - board falls back to checked results for those */
+}
+
+/* The effective status/defect count for a board row: the cached evaluation
+   when one exists, otherwise the checked result. Used by tabOf()/counts/tags
+   so the board reflects marked-as-same pairs live. */
+function effectiveFor(source, row) {
+  const cache = EVAL_CACHE[source];
+  const ev = cache && cache.get(row.email_id);
+  if (!ev) return { status: row.status, defect_fields: row.defect_fields || [], changed: false };
+  return { status: ev.status || row.status, defect_fields: ev.defect_fields || row.defect_fields || [], changed: Boolean(ev.changed) };
+}
+
 async function load() {
   const r = await fetch("public/data.json");
   if (!r.ok) throw new Error("could not load results");
   return r.json();
 }
 
-function tabOf(row) {
-  if (row.status === "MISMATCH") return "mismatch";
-  if (row.status === "NEEDS_REVIEW") return "needs_review";
+function tabOf(row, source = SRC) {
+  const eff = effectiveFor(source, row);
+  if (eff.status === "MISMATCH") return "mismatch";
+  if (eff.status === "NEEDS_REVIEW") return "needs_review";
   if (row.category === "BL_COMPARISON") return "cleared";
   return "other";
 }
@@ -190,20 +383,36 @@ function renderBoard() {
       const chipTxt = rowReview.verdict === "confirmed" ? "Confirmed" : rowReview.verdict === "flagged" ? "Flagged" : "Done";
       tags.append(el("span", `chip ${chipCls}`, chipTxt));
     }
-    if (r.status === "MISMATCH") {
-      for (const f of r.defect_fields) tags.append(el("span", "chip chip-mismatch", f.replace(/_/g, " ")));
-    } else if (r.status === "NEEDS_REVIEW") {
+    const eff = effectiveFor(SRC, r);
+    if (eff.status === "MISMATCH") {
+      for (const f of eff.defect_fields) tags.append(el("span", "chip chip-mismatch", f.replace(/_/g, " ")));
+    } else if (eff.status === "NEEDS_REVIEW") {
       tags.append(el("span", "chip chip-review", REASON[r.review_reason] || "needs a human"));
     } else if (r.category === "BL_COMPARISON") {
       tags.append(el("span", "chip chip-match", "7 of 7 match"));
     } else {
       tags.append(el("span", "chip chip-quiet", r.category.replace(/_/g, " ").toLowerCase()));
     }
+    if (eff.changed) {
+      const originalCount = (r.defect_fields || []).length;
+      const clearedCount = originalCount - eff.defect_fields.length;
+      if (eff.status !== "MISMATCH" && r.status === "MISMATCH") {
+        tags.append(el("span", "chip chip-quiet chip-marked-same", "Cleared by your marked pairs"));
+      } else if (clearedCount > 0) {
+        tags.append(el("span", "chip chip-quiet chip-marked-same", `${clearedCount} of ${originalCount} marked same`));
+      }
+    }
     a.append(tags);
     list.append(a);
   }
 
   if (rows.length > 200) list.append(el("div", "empty", `Showing the first 200 of ${rows.length}.`));
+
+  if (ACCOUNT.user && PAIRS.length && !BOARD_BATCH_TRIED[SRC]) {
+    evaluateBoardBatch(SRC).then((changed) => {
+      if (changed && location.hash.startsWith("#/board")) { updateTabCounts(); renderBoard(); }
+    });
+  }
 }
 
 function setTab(t) {
@@ -269,6 +478,34 @@ function humanise(text) {
   return out;
 }
 
+/* Learned equivalences: mirrors core/equivalence.py's EQUIVALENCE_FIELDS.
+   Only a mismatch on one of these five text fields can be "marked as
+   same" — container_count and gross_weight_kg never get the button, a
+   number difference is always a real defect. */
+const LEARNABLE_FIELDS = new Set([
+  "shipper", "consignee", "notify_party", "port_of_loading", "port_of_discharge",
+]);
+
+/* The exact capitalised labels seamTable() rows use (from data.json's
+   comparison.label), for the five learnable fields only — used wherever a
+   pair's field name is shown as its own chip/label (never in prose, where
+   FIELD_WORDS's lowercase form reads naturally). */
+const LEARNABLE_FIELD_LABELS = {
+  shipper: "Shipper", consignee: "Consignee", notify_party: "Notify Party",
+  port_of_loading: "Port of Loading", port_of_discharge: "Port of Discharge",
+};
+function fieldLabel(field) { return LEARNABLE_FIELD_LABELS[field] || FIELD_WORDS[field] || field; }
+
+/* The case reference (e.g. "5ALT-01226") for a pair's source case id, for
+   display — falling back to the raw id only when the case can no longer be
+   found (mail cleared, a different account, ...). Always still links to
+   #/case/<id>, which works either way. */
+function referenceForSource(id) {
+  if (!id) return id;
+  const d = lookupDetail(id);
+  return (d && d.reference) || id;
+}
+
 function stateOf(c) {
   if (c.undecidable) return "unknown";
   return c.matched ? "match" : "mismatch";
@@ -282,10 +519,12 @@ function verdictKind(d) {
   return d.status === "MISMATCH" ? "mismatch" : d.status === "NEEDS_REVIEW" ? "review" : "match";
 }
 
-function renderVerdict(d, host, { reply = true, afterVerdict = null } = {}) {
-  const kind = verdictKind(d);
+function renderVerdict(d, host, { reply = true, afterVerdict = null, evaluation = null, rerender = null } = {}) {
+  const effStatus = evaluation ? evaluation.status : d.status;
+  const effDefectFields = evaluation ? evaluation.defect_fields : d.defect_fields;
+  const kind = evaluation ? (effStatus === "MISMATCH" ? "mismatch" : effStatus === "NEEDS_REVIEW" ? "review" : "match") : verdictKind(d);
   const icon = { mismatch: "≠", review: "?", match: "✓" }[kind];
-  const n = d.defect_fields.length;
+  const n = effDefectFields.length;
   const title = {
     mismatch: `${n} discrepanc${n === 1 ? "y" : "ies"} found`,
     review: "A person needs to look at this",
@@ -296,18 +535,38 @@ function renderVerdict(d, host, { reply = true, afterVerdict = null } = {}) {
   v.append(el("div", "verdict-icon", icon));
   const vt = el("div", "verdict-text");
   vt.append(el("strong", null, title));
-  vt.append(document.createTextNode(humanise(d.rationale || "")));
+  /* The checked rationale ("2 of 7 fields differ: consignee, notify party")
+     goes stale the moment a covered field is marked as same - recompute it
+     from the effective defect fields instead of showing yesterday's count,
+     and drop it entirely once nothing differs any more. Only applies to a
+     BL_COMPARISON verdict; NEEDS_REVIEW/no-comparison rationale is untouched
+     since marking a pair can't fix an unreadable file. */
+  let rationaleText = humanise(d.rationale || "");
+  if (evaluation && evaluation.changed && d.comparisons.length && (d.status === "MISMATCH" || d.status === "OK")) {
+    rationaleText = effDefectFields.length
+      ? humanise(`${effDefectFields.length} of ${d.comparisons.length} fields differ: ${effDefectFields.join(", ")}`)
+      : "";
+  }
+  vt.append(document.createTextNode(rationaleText));
+  if (evaluation && evaluation.changed) {
+    const clearedCount = d.defect_fields.length - effDefectFields.length;
+    vt.append(el("div", "verdict-live-sub",
+      `Checked with ${d.defect_fields.length} discrepanc${d.defect_fields.length === 1 ? "y" : "ies"} · ${clearedCount} since marked as same by you`));
+  }
   v.append(vt);
   host.append(v);
 
   if (afterVerdict) host.append(afterVerdict);
 
   if (d.comparisons.length) {
-    host.append(seamTable(d));
+    host.append(seamTable(d, { evaluation, rerender }));
     const note = orderOfNote(d);
     if (note) host.append(note);
   }
-  if (reply) host.append(replyCard(d, d.reply_draft, "Reply, ready to send", null));
+  if (reply) {
+    const useDraft = evaluation && evaluation.changed && evaluation.reply_draft ? evaluation.reply_draft : d.reply_draft;
+    host.append(replyCard(d, useDraft, "Reply, ready to send", null, Boolean(evaluation && evaluation.changed && evaluation.reply_draft)));
+  }
 }
 
 /* "To the order of" vs a plain named consignee: legally, a BL naming a
@@ -356,7 +615,25 @@ const CSV_HEADERS = [
   "email_id", "reference", "subject", "from", "category", "status", "review_reason",
   "decided_by", "confidence", "field", "field_result", "si_value", "bl_value",
   "si_source", "bl_source", "explanation", "human_review", "human_note", "reviewed_at",
+  "marked_as_same", "marked_reason",
 ];
+
+/* Ensures every candidate row for `source` has a cached evaluation before an
+   export reads it, so the Discrepancy report (effective) and the
+   marked_as_same/marked_reason columns on the other two exports are never
+   built from a half-populated cache. A failed request just leaves those
+   two columns blank — exports never fail because of it. */
+async function ensureExportEvaluations(source) {
+  if (!ACCOUNT.user || !PAIRS.length) return;
+  await evaluateBoardBatch(source);
+}
+
+/* Which comparison fields are covered by a marked pair for this row, and
+   the pair id behind each — from the cached evaluation when one exists. */
+function coveredFieldsFor(source, emailId) {
+  const ev = EVAL_CACHE[source] && EVAL_CACHE[source].get(emailId);
+  return (ev && ev.rows) || {};
+}
 
 /* RFC 4180: every cell quoted, internal quotes doubled, CRLF line ends.
    Also neutralises spreadsheet formulas — uploaded mail is untrusted, so a
@@ -426,7 +703,10 @@ function baseExportRow(row, detail) {
   };
 }
 
-function fieldExportRow(row, detail, c) {
+function fieldExportRow(row, detail, c, source) {
+  const covered = source ? coveredFieldsFor(source, row.email_id) : {};
+  const pairId = covered[c.field];
+  const pair = pairId ? pairById(pairId) : null;
   return {
     ...baseExportRow(row, detail),
     field: c.label,
@@ -436,6 +716,8 @@ function fieldExportRow(row, detail, c) {
     si_source: sourceStr(c.si),
     bl_source: sourceStr(c.bl),
     explanation: fieldExplanation(c),
+    marked_as_same: pairId ? "yes" : "",
+    marked_reason: pair ? (pair.note || "") : "",
   };
 }
 
@@ -447,14 +729,19 @@ function noComparisonExportRow(row, detail) {
   };
 }
 
+/* Effective: a field marked as same by the signed-in clerk is dropped from
+   the discrepancy report entirely — that is the point of marking it. The
+   organiser submission (buildSubmissionJson) never uses this. */
 function buildDiscrepancyRows(source) {
   const rows = [];
   for (const row of boardForSource(source)) {
     const detail = detailForSource(source, row.email_id);
     const comparisons = (detail && detail.comparisons) || [];
+    const covered = coveredFieldsFor(source, row.email_id);
     if (comparisons.length) {
       for (const c of comparisons) {
-        if (c.undecidable || !c.matched) rows.push(fieldExportRow(row, detail, c));
+        if (covered[c.field]) continue;
+        if (c.undecidable || !c.matched) rows.push(fieldExportRow(row, detail, c, source));
       }
     } else if (row.status === "NEEDS_REVIEW") {
       rows.push(noComparisonExportRow(row, detail));
@@ -469,7 +756,7 @@ function buildFullResultsRows(source) {
     const detail = detailForSource(source, row.email_id);
     const comparisons = (detail && detail.comparisons) || [];
     if (comparisons.length) {
-      for (const c of comparisons) rows.push(fieldExportRow(row, detail, c));
+      for (const c of comparisons) rows.push(fieldExportRow(row, detail, c, source));
     } else {
       rows.push(noComparisonExportRow(row, detail));
     }
@@ -546,14 +833,16 @@ function initExportMenu() {
   });
 
   const discBtn = $("#export-discrepancy-csv");
-  if (discBtn) discBtn.addEventListener("click", () => {
+  if (discBtn) discBtn.addEventListener("click", async () => {
     closeExportMenu();
+    await ensureExportEvaluations(SRC);
     downloadCsv(buildDiscrepancyRows(SRC), "discrepancy-report");
     toast("Discrepancy report downloaded.");
   });
   const fullBtn = $("#export-full-csv");
-  if (fullBtn) fullBtn.addEventListener("click", () => {
+  if (fullBtn) fullBtn.addEventListener("click", async () => {
     closeExportMenu();
+    await ensureExportEvaluations(SRC);
     downloadCsv(buildFullResultsRows(SRC), "full-results");
     toast("Full results downloaded.");
   });
@@ -582,15 +871,25 @@ function didLine(d) {
   return `ClearDraft did: ${joinPlain(parts)}.`;
 }
 
-function yourPartLine(d) {
-  const kind = verdictKind(d);
+/* Effective, not checked: once a marked pair clears a field, "Your part"
+   must stop asking the clerk to chase a difference that no longer counts as
+   one. evaluation is optional — every existing (non-live, non-signed-in)
+   caller keeps working off the checked d exactly as before. */
+function yourPartLine(d, evaluation) {
+  const effDefectFields = evaluation ? evaluation.defect_fields : d.defect_fields;
+  const effStatus = evaluation ? evaluation.status : d.status;
+  const kind = evaluation ? (effStatus === "MISMATCH" ? "mismatch" : effStatus === "NEEDS_REVIEW" ? "review" : "match") : verdictKind(d);
+
   if (kind === "mismatch") {
-    const n = d.defect_fields.length;
+    const n = effDefectFields.length;
     return `Your part: Check the ${n} highlighted field${n === 1 ? "" : "s"} against ${n === 1 ? "its" : "their"} source lines, then send the reply asking for an amendment.`;
   }
   if (kind === "review") {
     const reason = REASON[d.review_reason] || "it was not sure";
     return `Your part: ClearDraft did not decide this one (${reason}). Open the documents and decide yourself.`;
+  }
+  if (evaluation && evaluation.changed && d.status === "MISMATCH" && effStatus !== "MISMATCH") {
+    return "Your part: Nothing left to amend — the differences are marked as same by you. Check the reply and send it.";
   }
   if (d.comparisons && d.comparisons.length) {
     return `Your part: All ${d.comparisons.length} fields match. Skim the table, then send the confirmation.`;
@@ -599,10 +898,10 @@ function yourPartLine(d) {
   return `Your part: Not a document check (${cat}). Handle it as usual.`;
 }
 
-function yourPartPanel(d) {
+function yourPartPanel(d, evaluation) {
   const panel = el("div", "your-part-panel");
   panel.append(el("div", "your-part-did", didLine(d)));
-  panel.append(el("div", "your-part-yours", yourPartLine(d)));
+  panel.append(el("div", "your-part-yours", yourPartLine(d, evaluation)));
   return panel;
 }
 
@@ -612,16 +911,20 @@ function yourPartPanel(d) {
 function caseCsvButton(d) {
   const btn = el("button", "link-btn case-csv-btn", "Download CSV");
   btn.type = "button";
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", async () => {
     const found = findRowById(d.email_id);
     const boardRow = found ? found.row : {
       email_id: d.email_id, reference: d.reference, subject: d.subject, from: d.from,
       category: d.category, status: d.status, review_reason: d.review_reason,
       decided_by: d.decided_by, defect_fields: d.defect_fields, has_defect: d.has_defect,
     };
+    const source = found ? found.source : SRC;
+    if (ACCOUNT.user && PAIRS.length && !EVAL_CACHE[source].has(d.email_id)) {
+      await evaluateCaseLive(d.email_id, source, d);
+    }
     const comparisons = d.comparisons || [];
     const rows = comparisons.length
-      ? comparisons.map((c) => fieldExportRow(boardRow, d, c))
+      ? comparisons.map((c) => fieldExportRow(boardRow, d, c, source))
       : [noComparisonExportRow(boardRow, d)];
     downloadCsv(rows, `case-${d.email_id}`);
     toast("CSV downloaded.");
@@ -694,6 +997,11 @@ function renderReview(id) {
   host.replaceChildren();
   if (!d) { host.append(el("div", "empty", "Not found.")); return; }
 
+  const found = findRowById(id);
+  const source = found ? found.source : SRC;
+  const evaluation = ACCOUNT.user ? EVAL_CACHE[source].get(id) : null;
+  const rerender = () => { if (location.hash === `#/case/${id}`) renderReview(id); };
+
   /* Built with el()/textContent, not innerHTML: an uploaded case's subject
      and sender text come straight from the .eml the user dropped in, so
      none of it is trusted as markup, escaped or not. */
@@ -728,13 +1036,14 @@ function renderReview(id) {
   host.append(caseActions);
   host.append(originalEmailDetails(d));
 
-  const yourPart = yourPartPanel(d);
+  const yourPart = yourPartPanel(d, evaluation);
   if (d.recheck) {
-    renderVerdict(d, host, { reply: false, afterVerdict: yourPart });
-    host.append(recheckCard(d.recheck));
-    host.append(replyCard(d, d.recheck.reply_draft, "Follow-up reply, ready to send", d.reply_draft));
+    renderVerdict(d, host, { reply: false, afterVerdict: yourPart, evaluation, rerender });
+    host.append(recheckCard(d.recheck, evaluation));
+    const recheckDraft = evaluation && evaluation.changed && evaluation.recheck_reply_draft ? evaluation.recheck_reply_draft : d.recheck.reply_draft;
+    host.append(replyCard(d, recheckDraft, "Follow-up reply, ready to send", d.reply_draft, Boolean(evaluation && evaluation.changed && evaluation.recheck_reply_draft)));
   } else {
-    renderVerdict(d, host, { afterVerdict: yourPart });
+    renderVerdict(d, host, { afterVerdict: yourPart, evaluation, rerender });
   }
 
   host.append(reviewBar(d));
@@ -743,21 +1052,286 @@ function renderReview(id) {
     FOCUS_CASE_HEADING = false;
     heading.focus();
   }
+
+  /* Live re-count: only when signed in with at least one saved pair, and
+     only once per case (the cache above already returns a hit on repeat
+     renders). Re-render whenever the evaluation covers anything at all, not
+     only when it *changed* the case's status/defect count — a case the
+     pipeline already cleared by applying the pair live (uploaded after the
+     pair was learned, or re-checked) still needs its covered rows grouped
+     and labelled, even though nothing about its status moved. */
+  if (!evaluation && ACCOUNT.user && PAIRS.length) {
+    evaluateCaseLive(id, source, d).then((ev) => {
+      if (ev && (ev.changed || (ev.rows && Object.keys(ev.rows).length))) rerender();
+    });
+  }
 }
 
-/* The seven-row table. Mismatches pinned to the top — the clerk's job is to
-   find what is wrong, so what is wrong goes first. */
-function seamTable(d) {
+/* "Mark as same" — teach ClearDraft that this exact SI/BL pair is the same
+   <field>, for this account only. Never a window.confirm()/alert()/
+   prompt(): the confirm step is inline, right under the row — same
+   interaction shape as the review screen's "Something's wrong" flag form. */
+const MARK_SAME_REASON_MAX = 280;
+
+function markSameConfirmPanel(c, d, markBtn, onSaved) {
+  const panel = el("div", "mark-same-confirm");
+  panel.hidden = true;
+
+  /* Signed out but accounts are available: no form, just an explanation and
+     a Sign in / Create account link — never a silent hide, per the plan. */
+  if (!ACCOUNT.user) {
+    const msg = el("div", "mark-same-prompt");
+    msg.append(document.createTextNode("Sign in to teach ClearDraft that these two are the same "));
+    msg.append(document.createTextNode(`${FIELD_WORDS[c.field] || c.field}. `));
+    panel.append(msg);
+    const link = el("a", "link-btn", "Sign in or create an account");
+    link.href = "#/account";
+    panel.append(link);
+    return panel;
+  }
+
+  const prompt = el("div", "mark-same-prompt");
+  prompt.append(document.createTextNode("Treat "));
+  prompt.append(el("b", null, (c.si && c.si.value) || ""));
+  prompt.append(document.createTextNode(" and "));
+  prompt.append(el("b", null, (c.bl && c.bl.value) || ""));
+  prompt.append(document.createTextNode(` as the same ${FIELD_WORDS[c.field] || c.field}?`));
+  panel.append(prompt);
+
+  const scope = el("div", "mark-same-scope",
+    "This teaches ClearDraft only this exact wording, only on this field, only on your account — you can undo it any time.");
+  panel.append(scope);
+
+  const reasonId = `mark-same-reason-${(d && d.email_id) || "adhoc"}-${c.field}`.replace(/[^a-zA-Z0-9-]+/g, "-");
+  const reasonLabel = el("label", "field-label mark-same-reason-label", "Why are these the same? (optional)");
+  reasonLabel.setAttribute("for", reasonId);
+  panel.append(reasonLabel);
+  const reasonBox = document.createElement("textarea");
+  reasonBox.id = reasonId;
+  reasonBox.className = "field-input mark-same-reason";
+  reasonBox.rows = 2;
+  reasonBox.maxLength = MARK_SAME_REASON_MAX;
+  panel.append(reasonBox);
+  const counter = el("div", "mark-same-reason-counter", `${MARK_SAME_REASON_MAX} characters left`);
+  panel.append(counter);
+  reasonBox.addEventListener("input", () => {
+    counter.textContent = `${MARK_SAME_REASON_MAX - reasonBox.value.length} characters left`;
+  });
+
+  const err = el("div", "account-error mark-same-error");
+  err.hidden = true;
+  err.setAttribute("aria-live", "polite");
+  panel.append(err);
+
+  const note = el("div", "note mark-same-saved-note");
+  note.hidden = true;
+  panel.append(note);
+
+  const actions = el("div", "mark-same-actions");
+  const confirmBtn = el("button", "btn btn-primary", "Confirm");
+  confirmBtn.type = "button";
+  const cancelBtn = el("button", "link-btn", "Cancel");
+  cancelBtn.type = "button";
+  actions.append(confirmBtn, cancelBtn);
+  panel.append(actions);
+
+  cancelBtn.addEventListener("click", () => { panel.hidden = true; if (markBtn) markBtn.setAttribute("aria-expanded", "false"); });
+
+  panel.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      panel.hidden = true;
+      if (markBtn) { markBtn.setAttribute("aria-expanded", "false"); markBtn.focus(); }
+    }
+  });
+
+  confirmBtn.addEventListener("click", async () => {
+    confirmBtn.disabled = true;
+    err.hidden = true;
+    try {
+      const r = await fetch("/api/equivalences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          field: c.field,
+          si_value: (c.si && c.si.value) || "",
+          bl_value: (c.bl && c.bl.value) || "",
+          source: (d && d.email_id) || "",
+          note: reasonBox.value,
+        }),
+      });
+      let j = {};
+      try { j = await r.json(); } catch { /* no body */ }
+
+      if (r.status === 401) {
+        err.hidden = false;
+        err.textContent = "Sign in to teach ClearDraft";
+        return;
+      }
+      if (!r.ok) {
+        err.hidden = false;
+        err.textContent = (j && j.detail) || "Could not save this pair.";
+        return;
+      }
+
+      await loadPairs();
+
+      // .mark-same-actions/.btn/.link-btn all set their own `display`, which
+      // overrides the `[hidden]` UA rule (an author style always beats it,
+      // regardless of specificity) — so Confirm/Cancel stayed visible and
+      // clickable after a successful save. Removing the node sidesteps that
+      // entirely instead of fighting the cascade.
+      actions.remove();
+      reasonBox.remove();
+      reasonLabel.remove();
+      counter.remove();
+      prompt.hidden = true;
+      scope.hidden = true;
+      note.hidden = false;
+      note.textContent = j.already_marked
+        ? "Already marked as same — this row will move up now."
+        : "Saved — this row will move up now.";
+      if (markBtn) markBtn.disabled = true;
+      if (onSaved) onSaved(j.pair);
+    } catch {
+      err.hidden = false;
+      err.textContent = "Could not reach the server. Check your connection and try again.";
+    } finally {
+      confirmBtn.disabled = false;
+    }
+  });
+
+  return panel;
+}
+
+/* Deletes a saved pair by id and refreshes local state — every caller
+   already knows the id (from PAIRS or an evaluation's rows map), so this
+   never needs to search for one. */
+async function deletePair(id) {
+  try {
+    const r = await fetch(`/api/equivalences/${encodeURIComponent(id)}`, { method: "DELETE", credentials: "same-origin" });
+    if (r.ok) await loadPairs();
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/* Which comparison fields are covered by a marked pair, and the pair id
+   behind each — merging two sources so the "Marked as same" group and its
+   full label (reason/date/source/Undo/Edit) render consistently everywhere
+   a covered field can show up:
+   1. evaluation.rows, from POST /api/equivalences/evaluate against a saved
+      case — present whether or not the evaluation actually *changed* the
+      case's status (a case already checked OK because the pipeline applied
+      the pair live still has that field's row covered).
+   2. comparison.learned + a local PAIRS lookup, for a row that arrived
+      already matched via a pair — the live "Check a pair" checker and
+      freshly processed mail both apply pairs at check time (server-side
+      known_equal) and never call /evaluate at all, so this is the only
+      signal available for them. Retires the old learnedChip's inline
+      "Matched via a pair you approved" rendering in favour of the one
+      shared label. */
+function buildCoveredRows(d, evaluation) {
+  const covered = { ...((evaluation && evaluation.rows) || {}) };
+  for (const c of d.comparisons || []) {
+    if (covered[c.field] || !c.learned) continue;
+    const match = PAIRS.find((p) => p.field === c.field && (
+      (p.a === c.si_norm && p.b === c.bl_norm) || (p.a === c.bl_norm && p.b === c.si_norm)
+    ));
+    if (match) covered[c.field] = match.id;
+  }
+  return covered;
+}
+
+function formatPairDate(iso) {
+  if (!iso) return "";
+  const dt = new Date(iso);
+  if (isNaN(dt)) return "";
+  return dt.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+/* The label + Undo/Edit under a row in the "Marked as same" group: who
+   marked it, when, from which case, and the reason (or a nudge to add
+   one). Undo removes the pair outright; Edit deep-links to #/learned/<id>. */
+function markedSameLabel(pairId, onUndo) {
+  const wrap = el("div", "marked-same-label");
+  const pair = pairById(pairId);
+  if (!pair) {
+    wrap.append(document.createTextNode("Marked as same by you."));
+    return wrap;
+  }
+  const line = el("div", "marked-same-line");
+  const date = formatPairDate(pair.added_at);
+  line.append(document.createTextNode(`Marked as same by you${date ? ` · ${date}` : ""}${pair.source ? ` · from ` : ""}`));
+  if (pair.source) {
+    const srcLink = el("a", null, referenceForSource(pair.source));
+    srcLink.href = `#/case/${pair.source}`;
+    line.append(srcLink);
+  }
+  wrap.append(line);
+
+  const reasonLine = el("div", "marked-same-reason");
+  if (pair.note) {
+    reasonLine.append(document.createTextNode(`"${pair.note}"`));
+  } else {
+    reasonLine.append(document.createTextNode("No reason given — "));
+    const addLink = el("a", null, "add one");
+    addLink.href = `#/learned/${pair.id}`;
+    reasonLine.append(addLink);
+  }
+  wrap.append(reasonLine);
+
+  const actions = el("div", "marked-same-actions");
+  const undoBtn = el("button", "link-btn", "Undo");
+  undoBtn.type = "button";
+  undoBtn.addEventListener("click", async () => {
+    undoBtn.disabled = true;
+    const removed = await deletePair(pair.id);
+    if (removed) {
+      toast("Removed — this row will move back to Discrepancies.");
+      if (onUndo) onUndo();
+    } else {
+      undoBtn.disabled = false;
+      toast("Could not remove this pair. Try again.");
+    }
+  });
+  actions.append(undoBtn);
+  const editLink = el("a", "link-btn", "Edit");
+  editLink.href = `#/learned/${pair.id}`;
+  actions.append(editLink);
+  wrap.append(actions);
+
+  return wrap;
+}
+
+/* The seven-row table. Order: discrepancies first (the clerk's job is to
+   find what is wrong), then a "Marked as same" group for rows a signed-in
+   clerk has covered with a learned pair (evaluation.rows), then couldn't-
+   read rows, then matches. */
+function seamTable(d, ctx = {}) {
   const wrap = el("div", "seam-wrap");
   const head = el("div", "seam-head");
-  head.innerHTML = `<div>Field</div><div class="h-si">Shipping Instruction</div><div class="h-seam"></div><div class="h-bl">Draft Bill of Lading</div>`;
+  head.append(el("div", null, "Field"), el("div", "h-si", "Shipping Instruction"), el("div", "h-seam"), el("div", "h-bl", "Draft Bill of Lading"));
   wrap.append(head);
 
-  const rank = { mismatch: 0, unknown: 1, match: 2 };
-  const rows = [...d.comparisons].sort((a, b) => rank[stateOf(a)] - rank[stateOf(b)]);
+  const evaluation = ctx.evaluation || null;
+  const coveredRows = buildCoveredRows(d, evaluation);
 
-  for (const c of rows) {
+  const groups = { mismatch: [], covered: [], unknown: [], match: [] };
+  for (const c of d.comparisons) {
     const st = stateOf(c);
+    // Covered regardless of state: a genuine mismatch the evaluation
+    // resolved, or a row that arrived already matched via a pair applied at
+    // check time — both land in the "Marked as same" group, never among
+    // ordinary matches.
+    if (coveredRows[c.field]) groups.covered.push(c);
+    else groups[st].push(c);
+  }
+
+  function renderRow(c, coveredPairId) {
+    const st = coveredPairId ? "covered" : stateOf(c);
     const row = el("div", "seam-row");
     row.dataset.state = st;
 
@@ -779,6 +1353,33 @@ function seamTable(d) {
     }
 
     wrap.append(row);
+
+    if (coveredPairId) {
+      const labelPanel = el("div", "marked-same-panel");
+      labelPanel.append(markedSameLabel(coveredPairId, () => { if (ctx.rerender) ctx.rerender(); }));
+      wrap.append(labelPanel);
+    }
+
+    /* "Mark as same": only a mismatch, only a learnable text field, only
+       for a signed-in clerk (signed-out visitors still see the button, but
+       the panel offers Sign in / Create account instead of a form).
+       Numeric-field rows never see the button at all. */
+    if (st === "mismatch" && LEARNABLE_FIELDS.has(c.field) && (ACCOUNT.user || ACCOUNT.available)) {
+      const markBtn = el("button", "link-btn mark-same-btn", "Mark as same");
+      markBtn.type = "button";
+      markBtn.setAttribute("aria-expanded", "false");
+      const panel = markSameConfirmPanel(c, d, markBtn, () => { if (ctx.rerender) ctx.rerender(); });
+      markBtn.addEventListener("click", () => {
+        panel.hidden = !panel.hidden;
+        markBtn.setAttribute("aria-expanded", String(!panel.hidden));
+        if (!panel.hidden) {
+          const reasonBox = panel.querySelector(".mark-same-reason");
+          if (reasonBox) reasonBox.focus();
+        }
+      });
+      label.append(markBtn);
+      wrap.append(panel);
+    }
 
     /* Proof is offered only where it is needed. Seven identical "show the
        source" links down a table is a wall of choices the clerk has to read
@@ -808,6 +1409,15 @@ function seamTable(d) {
       wrap.append(panel);
     }
   }
+
+  for (const c of groups.mismatch) renderRow(c, null);
+  if (groups.covered.length) {
+    wrap.append(el("div", "seam-group-label seam-group-marked", `Marked as same (${groups.covered.length})`));
+    for (const c of groups.covered) renderRow(c, coveredRows[c.field]);
+  }
+  for (const c of groups.unknown) renderRow(c, null);
+  for (const c of groups.match) renderRow(c, null);
+
   return wrap;
 }
 
@@ -815,18 +1425,28 @@ function seamTable(d) {
    email_id + which reply) so navigating away and back keeps them. Primary
    action opens a pre-filled compose window straight in Gmail; ClearDraft
    still never sends anything — the clerk checks it and presses Send. */
-function replyCard(d, text, title, earlier) {
+function replyCard(d, text, title, earlier, redrafted = false) {
   const which = earlier ? "recheck" : "reply";
   const key = `${d.email_id || "adhoc"}::${which}`;
   const draftText = text || "";
   const startText = EDITS.has(key) ? EDITS.get(key) : draftText;
+  const hadEdit = EDITS.has(key);
 
   const card = el("div", "reply-card");
 
   const head = el("div", "reply-head");
   head.append(el("h3", null, title));
   const metaRow = el("div", "reply-meta-row");
-  metaRow.append(el("span", "reply-note", "Built from the checked values. Not written by a model."));
+  metaRow.append(el("span", "reply-note", redrafted
+    ? "Built from the checked values. Not written by a model."
+    : "Built from the checked values. Not written by a model."));
+  if (redrafted) {
+    if (hadEdit) {
+      metaRow.append(el("span", "chip chip-quiet reply-redrafted-chip", "Your edit kept — Reset to draft to see the update for your marked pairs"));
+    } else {
+      metaRow.append(el("span", "chip chip-quiet reply-redrafted-chip", "Updated for your marked pairs"));
+    }
+  }
   const editedChip = el("span", "chip chip-quiet reply-edited-chip", "Edited");
   const resetBtn = el("button", "link-btn reply-reset-btn", "Reset to draft");
   resetBtn.type = "button";
@@ -1193,16 +1813,25 @@ const OUTCOME = {
   ok:           ["Unchanged, correct", "quiet"],
 };
 
-function recheckCard(rc) {
+function recheckCard(rc, evaluation) {
   const card = el("div", "recheck");
   const head = el("div", "recheck-head");
   head.append(el("h3", null, "Amended draft received, re-checked"));
   if (rc.demo) head.append(el("span", "chip chip-quiet", "demo document"));
   card.append(head);
 
+  const covered = (evaluation && evaluation.recheck) || {};
+
   const order = ["newly_broken", "still_wrong", "unreadable", "fixed", "ok"];
   for (const kind of order) {
-    const rows = rc.rows.filter((r) => r.outcome === kind);
+    const rows = rc.rows.filter((r) => (r.outcome === kind) && !(kind !== "ok" && covered[r.field]));
+    // A still_wrong/newly_broken row whose SI↔v2 pair is covered moves to
+    // "Unchanged, correct" — labelled "marked as same" — never "Fixed".
+    if (kind === "ok") {
+      for (const r of rc.rows) {
+        if (r.outcome !== "ok" && covered[r.field] && !rows.includes(r)) rows.push(r);
+      }
+    }
     if (!rows.length) continue;
     const [label, tone] = OUTCOME[kind];
     const grp = el("div", `recheck-group tone-${tone}`);
@@ -1210,8 +1839,10 @@ function recheckCard(rc) {
     for (const r of rows) {
       const line = el("div", "recheck-row");
       line.append(el("span", "recheck-field", r.label));
+      const isMarked = kind === "ok" && covered[r.field];
       if (kind === "ok") {
         line.append(el("span", "recheck-val", r.v2 || ""));
+        if (isMarked) line.append(el("span", "chip chip-quiet recheck-marked-chip", "marked as same"));
       } else {
         line.append(el("span", "recheck-val", `${r.v1 ?? "-"}  →  ${r.v2 ?? "-"}`));
         line.append(el("span", "recheck-si", `SI says ${r.si ?? "-"}`));
@@ -2021,6 +2652,7 @@ function renderAccountChip() {
     wrap.hidden = true;
     closeAccountMenu();
   }
+  renderLearnedShortcut();
 }
 
 function closeAccountMenu() {
@@ -2065,6 +2697,7 @@ async function loadAccountMail() {
 async function afterSignedIn() {
   await importLocalMailIfAny();
   await loadAccountMail();
+  await loadPairs();
   renderAccountChip();
   if (location.hash.startsWith("#/board")) renderBoardView();
 }
@@ -2073,6 +2706,9 @@ async function signOut() {
   try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch { /* proceed regardless */ }
   ACCOUNT.user = null;
   MINE = loadMine();
+  PAIRS = [];
+  invalidateEvalCache();
+  renderLearnedShortcut();
   renderAccountChip();
   location.hash = "#/";
   route();
@@ -2218,13 +2854,288 @@ function initAccountForm() {
   });
 }
 
+/* ── #/account, signed in: a summary + link to #/learned ─────────
+   A signed-in visitor to #/account sees a one-line summary instead of the
+   create-account/sign-in form (that form is for signed-out visitors); the
+   full management page lives at #/learned. */
+function renderAccountSignedInView() {
+  $("#account-form").hidden = true;
+  $("#account-signed-in").hidden = false;
+  $("#account-signed-in-email").textContent = ACCOUNT.user.email;
+  const summary = $("#learned-summary-line");
+  if (summary) {
+    loadPairs().then(() => {
+      const n = PAIRS.length;
+      summary.textContent = n
+        ? `${n} of ${MAX_PAIRS} pairs marked as the same, only visible to you.`
+        : "No pairs marked as the same yet.";
+    });
+  }
+}
+
+/* ── #/learned — the management page ──────────────────────────── */
+let LEARNED_QUERY = "";
+let LEARNED_FIELD_FILTER = null; // null = all fields
+let LEARNED_EDIT_ID = null;      // set by #/learned/<id>, opens that row for editing
+const LEARNED_REMOVED = new Map(); // id -> removed pair, for "Removed · Restore"
+
+function learnedMatchesQuery(pair, q) {
+  if (!q) return true;
+  const hay = [pair.si_raw, pair.bl_raw, pair.a, pair.b, pair.note, pair.field].filter(Boolean).join(" ").toLowerCase();
+  return hay.includes(q);
+}
+
+function learnedFieldChips(pairs) {
+  const wrap = $("#learned-field-chips");
+  wrap.replaceChildren();
+  const counts = {};
+  for (const p of pairs) counts[p.field] = (counts[p.field] || 0) + 1;
+
+  const allBtn = el("button", "chip chip-quiet learned-chip-btn", `All (${pairs.length})`);
+  allBtn.type = "button";
+  allBtn.setAttribute("aria-pressed", String(LEARNED_FIELD_FILTER === null));
+  allBtn.addEventListener("click", () => { LEARNED_FIELD_FILTER = null; renderLearnedList(); });
+  wrap.append(allBtn);
+
+  for (const field of Object.keys(counts).sort()) {
+    const btn = el("button", "chip chip-quiet learned-chip-btn", `${fieldLabel(field)} (${counts[field]})`);
+    btn.type = "button";
+    btn.setAttribute("aria-pressed", String(LEARNED_FIELD_FILTER === field));
+    btn.addEventListener("click", () => { LEARNED_FIELD_FILTER = field; renderLearnedList(); });
+    wrap.append(btn);
+  }
+}
+
+/* One row: field · SI wording ↔ BL wording (· "matches as …" when
+   normalisation changed it) · reason · marked date + source link · edited.
+   Edit toggles an inline form (wordings + reason, server errors inline);
+   Remove swaps the row for "Removed · Restore". */
+function learnedPairRow(pair, openEdit) {
+  const row = el("div", "learned-row");
+  row.dataset.pairId = pair.id;
+
+  if (LEARNED_REMOVED.has(pair.id)) {
+    const removedLine = el("div", "learned-removed-line");
+    removedLine.append(document.createTextNode("Removed · "));
+    const restoreBtn = el("button", "link-btn", "Restore");
+    restoreBtn.type = "button";
+    restoreBtn.addEventListener("click", async () => {
+      restoreBtn.disabled = true;
+      const removedPair = LEARNED_REMOVED.get(pair.id);
+      try {
+        const r = await fetch("/api/equivalences", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            field: removedPair.field, si_value: removedPair.si_raw, bl_value: removedPair.bl_raw,
+            source: removedPair.source || "", note: removedPair.note || "",
+          }),
+        });
+        if (r.ok) {
+          LEARNED_REMOVED.delete(pair.id);
+          await loadPairs();
+          renderLearnedPage();
+          toast("Restored.");
+        } else {
+          restoreBtn.disabled = false;
+          toast("Could not restore this pair.");
+        }
+      } catch {
+        restoreBtn.disabled = false;
+        toast("Could not reach the server.");
+      }
+    });
+    removedLine.append(restoreBtn);
+    row.append(removedLine);
+    return row;
+  }
+
+  const head = el("div", "learned-row-head");
+  head.append(el("span", "chip chip-quiet learned-field-chip", fieldLabel(pair.field)));
+  const wordings = el("span", "learned-wordings");
+  wordings.append(el("span", null, pair.si_raw || pair.a));
+  wordings.append(el("span", "learned-pair-arrow", "↔"));
+  wordings.append(el("span", null, pair.bl_raw || pair.b));
+  head.append(wordings);
+  row.append(head);
+
+  const norm = pair.a !== (pair.si_raw || pair.a) || pair.b !== (pair.bl_raw || pair.b);
+  if (norm) row.append(el("div", "learned-matches-as", `matches as "${pair.a}" ↔ "${pair.b}"`));
+
+  const reasonLine = el("div", "learned-reason");
+  reasonLine.textContent = pair.note ? `"${pair.note}"` : "No reason given";
+  row.append(reasonLine);
+
+  const meta = el("div", "learned-meta");
+  const date = formatPairDate(pair.added_at);
+  meta.append(document.createTextNode(`Marked${date ? ` ${date}` : ""}${pair.source ? " from case " : ""}`));
+  if (pair.source) {
+    const link = el("a", null, referenceForSource(pair.source));
+    link.href = `#/case/${pair.source}`;
+    meta.append(link);
+  }
+  if (pair.updated_at) meta.append(document.createTextNode(" · edited"));
+  row.append(meta);
+
+  const actions = el("div", "learned-actions");
+  const editBtn = el("button", "link-btn", "Edit");
+  editBtn.type = "button";
+  const removeBtn = el("button", "link-btn", "Remove");
+  removeBtn.type = "button";
+  actions.append(editBtn, removeBtn);
+  row.append(actions);
+
+  const editForm = el("div", "learned-edit-form");
+  editForm.hidden = !openEdit;
+
+  function buildEditForm() {
+    editForm.replaceChildren();
+    const siLabel = el("label", "field-label", "Shipping Instruction wording");
+    const siInput = document.createElement("input");
+    siInput.type = "text"; siInput.className = "field-input"; siInput.value = pair.si_raw || pair.a;
+    editForm.append(siLabel, siInput);
+
+    const blLabel = el("label", "field-label", "Draft Bill of Lading wording");
+    const blInput = document.createElement("input");
+    blInput.type = "text"; blInput.className = "field-input"; blInput.value = pair.bl_raw || pair.b;
+    editForm.append(blLabel, blInput);
+
+    const noteLabel = el("label", "field-label", "Reason (optional)");
+    const noteInput = document.createElement("textarea");
+    noteInput.className = "field-input"; noteInput.rows = 2; noteInput.maxLength = MARK_SAME_REASON_MAX;
+    noteInput.value = pair.note || "";
+    editForm.append(noteLabel, noteInput);
+
+    const err = el("div", "account-error learned-edit-error");
+    err.hidden = true; err.setAttribute("aria-live", "polite");
+    editForm.append(err);
+
+    const editActions = el("div", "learned-edit-actions");
+    const saveBtn = el("button", "btn btn-primary", "Save");
+    saveBtn.type = "button";
+    const cancelBtn = el("button", "link-btn", "Cancel");
+    cancelBtn.type = "button";
+    editActions.append(saveBtn, cancelBtn);
+    editForm.append(editActions);
+
+    cancelBtn.addEventListener("click", () => { editForm.hidden = true; });
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.disabled = true;
+      err.hidden = true;
+      try {
+        const r = await fetch(`/api/equivalences/${encodeURIComponent(pair.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ si_value: siInput.value, bl_value: blInput.value, note: noteInput.value }),
+        });
+        let j = {};
+        try { j = await r.json(); } catch { /* no body */ }
+        if (!r.ok) {
+          err.hidden = false;
+          err.textContent = (j && j.detail) || "Could not save this change.";
+          return;
+        }
+        await loadPairs();
+        renderLearnedPage();
+        toast("Saved.");
+      } catch {
+        err.hidden = false;
+        err.textContent = "Could not reach the server. Check your connection and try again.";
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+  }
+  buildEditForm();
+  row.append(editForm);
+
+  editBtn.addEventListener("click", () => { editForm.hidden = !editForm.hidden; });
+
+  removeBtn.addEventListener("click", async () => {
+    removeBtn.disabled = true;
+    const removed = await deletePair(pair.id);
+    if (removed) {
+      LEARNED_REMOVED.set(pair.id, pair);
+      renderLearnedPage();
+    } else {
+      removeBtn.disabled = false;
+      toast("Could not remove this pair. Try again.");
+    }
+  });
+
+  return row;
+}
+
+function renderLearnedList() {
+  const host = $("#learned-list");
+  const empty = $("#learned-empty");
+  if (!host) return;
+  learnedFieldChips(PAIRS);
+  const q = LEARNED_QUERY.trim().toLowerCase();
+  let pairs = [...PAIRS].sort((a, b) => (b.added_at || "").localeCompare(a.added_at || ""));
+  if (LEARNED_FIELD_FILTER) pairs = pairs.filter((p) => p.field === LEARNED_FIELD_FILTER);
+  pairs = pairs.filter((p) => learnedMatchesQuery(p, q));
+
+  host.replaceChildren();
+  const removedIds = [...LEARNED_REMOVED.keys()].filter((id) => !PAIRS.some((p) => p.id === id));
+  if (!pairs.length && !removedIds.length) {
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+  for (const pair of pairs) host.append(learnedPairRow(pair, pair.id === LEARNED_EDIT_ID));
+  for (const id of removedIds) {
+    const removedPair = LEARNED_REMOVED.get(id);
+    host.append(learnedPairRow(removedPair, false));
+  }
+}
+
+function renderLearnedPage() {
+  const usage = $("#learned-usage-line");
+  if (usage) usage.textContent = `${PAIRS.length} of ${MAX_PAIRS} used`;
+  renderLearnedList();
+}
+
+async function renderLearnedView(editId) {
+  LEARNED_EDIT_ID = editId || null;
+  const signedOut = $("#learned-signed-out");
+  const unavailable = $("#learned-unavailable");
+  const signedIn = $("#learned-signed-in");
+  signedOut.hidden = true; unavailable.hidden = true; signedIn.hidden = true;
+
+  if (ACCOUNT.available === false) { unavailable.hidden = false; return; }
+  if (!ACCOUNT.user) { signedOut.hidden = false; return; }
+
+  signedIn.hidden = false;
+  const list = $("#learned-list");
+  list.replaceChildren(el("div", "empty", "Loading…"));
+  await loadPairs();
+  renderLearnedPage();
+  const heading = $("#learned-heading");
+  if (heading) heading.focus();
+}
+
+function initLearnedPage() {
+  const search = $("#learned-search");
+  if (search) {
+    search.addEventListener("input", () => { LEARNED_QUERY = search.value; renderLearnedList(); });
+  }
+}
+
 function route() {
   const h = location.hash;
-  const views = { home: $("#view-home"), board: $("#view-board"), review: $("#view-review"), accuracy: $("#view-accuracy"), check: $("#view-check"), account: $("#view-account") };
+  const views = { home: $("#view-home"), board: $("#view-board"), review: $("#view-review"), accuracy: $("#view-accuracy"), check: $("#view-check"), account: $("#view-account"), learned: $("#view-learned") };
   for (const v of Object.values(views)) v.hidden = true;
 
   let active = "home";
-  if (h.startsWith("#/case/")) {
+  if (h.startsWith("#/learned")) {
+    active = "learned";
+    views.learned.hidden = false;
+    const editId = h.startsWith("#/learned/") ? h.slice("#/learned/".length) : null;
+    renderLearnedView(editId);
+  } else if (h.startsWith("#/case/")) {
     active = "review";
     views.review.hidden = false;
     renderReview(h.slice("#/case/".length));
@@ -2238,9 +3149,15 @@ function route() {
   } else if (h.startsWith("#/account")) {
     active = "account";
     views.account.hidden = false;
-    setAccountMode("signup");
-    const emailInput = $("#account-email-input");
-    if (emailInput) emailInput.focus();
+    if (ACCOUNT.user) {
+      renderAccountSignedInView();
+    } else {
+      $("#account-form").hidden = false;
+      $("#account-signed-in").hidden = true;
+      setAccountMode("signup");
+      const emailInput = $("#account-email-input");
+      if (emailInput) emailInput.focus();
+    }
   } else if (h.startsWith("#/board")) {
     active = "board";
     views.board.hidden = false;
@@ -2257,6 +3174,11 @@ function route() {
     const route = a.dataset.route;
     const on = route === active || (route === "board" && active === "review");
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  }
+  const learnedShortcut = document.getElementById("learned-shortcut");
+  if (learnedShortcut) {
+    if (location.hash.startsWith("#/learned")) learnedShortcut.setAttribute("aria-current", "page");
+    else learnedShortcut.removeAttribute("aria-current");
   }
   renderAccountChip();
   window.scrollTo(0, 0);
@@ -2295,6 +3217,7 @@ function toast(msg) {
   initAccountForm();
   initCaseKeyboardNav();
   initExportMenu();
+  initLearnedPage();
 
   const mineCard = $("#home-card-mine");
   if (mineCard) mineCard.addEventListener("click", () => setSourceKey("mine"));

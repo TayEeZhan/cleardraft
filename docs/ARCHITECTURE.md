@@ -244,6 +244,114 @@ downloads land in a private per-instance temp directory keyed by a flattened,
 validated name. Every request carries a timeout, and an unreachable server
 raises a `ConnectionError` naming the URL, not a bare socket traceback.
 
+### ADR-011 — Learned equivalences: exact pairs, per account, live path only.
+
+**Status.** Proposed. **Deciders.** Sheng Kuan (pending Ee Zhan).
+
+**Context.** The deck (p.21) promises that ClearDraft "learns from every
+correction": on a mismatch row, a reviewer clicks "these are the same" and the
+next identical case clears itself. Reading the repo moved three things from
+the deck's original sketch, all simpler and safer:
+1. No new storage adapter. `adapters/store.py` already is the storage port
+   (`Store`: get/set/delete/incr), with Upstash Redis in production and
+   `MemoryStore` in tests. The deck's "JSON for the demo, SQLite later" is
+   unnecessary — this reuses exactly what `api/_accounts.py` already uses for
+   users, sessions, and mail.
+2. Per-account, not global. Accounts already exist (`api/_accounts.py:
+   current_user`). A learned pair is stored under `equiv:{email}`, so one
+   careless click only ever affects that clerk's own future checks — the
+   deck's biggest risk, "one click harms everyone", does not arise. A
+   signed-out visitor never sees the control and is never affected by anyone
+   else's pairs.
+3. No change to the frozen `core/types.py`. A learned match is detectable
+   without a new field: `matched == True` while `si_norm != bl_norm` can only
+   happen via an approved pair, so the API derives `"learned": true` from
+   that, and `core/decide.py`, `core/reply.py` and the type contract are
+   untouched.
+
+**Decision.** `core/compare.py` gains an optional `known_equal` keyword
+parameter (default `None`); with it omitted or `None`, behaviour is
+byte-identical to before this feature existed, which is what keeps
+`scripts/run_pipeline.py` and `scripts/export_ui_data.py` reproducible for
+the organiser's scorer — neither script ever passes it. When given, a mismatch
+downgrades to a match only for one of the five text fields
+(`core/equivalence.py:EQUIVALENCE_FIELDS` — shipper, consignee, notify_party,
+port_of_loading, port_of_discharge; never `container_count` or
+`gross_weight_kg`, where a numeric difference is always a real defect), only
+when the row is not `undecidable`, and only for the exact normalised pair a
+signed-in clerk approved, order-independent (`core/equivalence.py:pair_key`).
+A new router, `api/_equivalences.py`, exposes `GET/POST/DELETE
+/api/equivalences`, gated on `current_user()` the same way `api/_accounts.py`
+gates mail; `api/index.py` passes `known_equal=lookup_for(request)` at both of
+its `compare()` call sites. The web UI (`web/app.js`) adds a "Mark as same"
+button on an eligible mismatch row with an inline (never `window.confirm`)
+confirm step, a "Matched via a pair you approved" chip with Undo on a row
+that came back `learned: true`, and a "Learned pairs" list with Undo on the
+account page.
+
+**Amendment (live re-count, reasons, management page).** A pair can now
+carry an optional reason (`note`, ≤280 chars) and be edited after the fact
+(`PATCH /api/equivalences/{id}`) — wording is re-normalised and re-checked
+against `can_learn`; a clash with another saved pair is a 409, the field
+itself stays immutable. The harder problem this phase solves: a **saved**
+board case is a frozen snapshot (`public/data.json` / the mail store), never
+re-run, so marking a pair after the fact could not visibly change it under
+the v1 design. `core/equivalence.py:evaluate_case` fixes this by staying
+pure and stateless — given a case's stored comparisons/recheck rows and the
+account's pair index, it re-derives "the one rule" (a differing row is
+*covered* when it is a learnable text field, both sides normalise to
+non-empty different strings, and that exact pair is on file) without
+touching `core/decide.py` or re-running the pipeline. `POST
+/api/equivalences/evaluate` is the transport for this: given up to 600
+cases shaped like saved details, it returns each case's effective
+status/defect_fields, which rows are covered (`rows: {field: pair_id}`) and
+which recheck rows are covered, and — with `draft:true` for exactly one
+case — a redrafted reply/follow-up reply, built by reconstructing
+`Email`/`Decision`/`RecheckRow` from the JSON and calling the existing,
+frozen `draft_reply`/`draft_recheck_reply` unchanged. Nothing here writes
+back to storage: it is a read-time projection, so removing or editing a
+pair automatically un-covers whatever it used to cover on the next call.
+
+The UI (`web/app.js`) caches one evaluation per case per source
+(`EVAL_CACHE`), invalidated whenever a pair is created, edited or removed
+(`loadPairs()`), so a case view, the inbox board's tabs/counts/tags, and
+the three CSV/JSON exports all read a consistent, live view without
+re-running any check. **The organiser submission (`buildSubmissionJson`) is
+the one deliberate exception — it stays on the checked result, unaffected
+by anything a clerk marks, because it exists to score the pipeline itself.**
+The Discrepancy report CSV drops covered rows entirely; the Full-results and
+per-case CSVs instead gain `marked_as_same`/`marked_reason` columns, so the
+export always shows why a row that looks like a mismatch didn't count as
+one. A new `#/learned` page (linked from the account menu, the account
+summary, and every marked-row label) is the one place to search, filter,
+edit and remove pairs, with `#/learned/<id>` deep-linking straight to a
+pair's inline edit form.
+
+**Alternatives considered.**
+- *A rule derived from the pair* (e.g. "treat any X as Y from now on"). Rejected:
+  a rule generalises past what a human actually verified and risks hiding a
+  real future defect between two similarly-named parties.
+- *A global, shared equivalence table.* Rejected for this round: one clerk's
+  mistake would silently change every other clerk's results with no
+  attribution. Per-account is the safe default; a team-approved list with a
+  supervisor sign-off is a natural follow-up, not a blocker.
+- *Fuzzy/similarity matching instead of exact pairs.* Rejected for the same
+  reason ADR-001 rejects it for the base comparison: every planted defect in
+  this dataset is substantive, so a threshold that helps a formatting mismatch
+  is a threshold that can also swallow a real one.
+
+**Consequences.**
+- Applies to *new* checks only; a result already saved in a mailbox keeps its
+  original verdict — that snapshot is also the audit trail of what a clerk
+  actually saw at the time.
+- If the store is unavailable, `lookup_for()` returns `None` and the button
+  hides; checks run exactly as they do today. A `known_equal` that raises for
+  any other reason is caught inside `compare()` and treated as no-match, never
+  as a crash.
+- Bounded and reversible: at most 500 pairs per account, each value at most
+  200 characters, every pair attributed (who, when, source) and undoable in
+  one click, both from the row it cleared and from the account page.
+
 ---
 
 ## 6. Failure modes
