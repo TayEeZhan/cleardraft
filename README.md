@@ -70,7 +70,7 @@ email ──> 1 classify ──> 2 extract ──> 3 compare ──> 4 decide �
 Every record reports `decided_by`, so the proportion of decisions made without
 the model is measurable rather than asserted.
 
-Full reasoning, including seven architecture decision records with their
+Full reasoning, including twelve architecture decision records with their
 trade-offs: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ---
@@ -479,7 +479,7 @@ dataset.
 
 | Document | What it covers |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, seven ADRs with trade-offs, failure modes, scaling limits |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, twelve ADRs with trade-offs, failure modes, scaling limits |
 | [docs/API.md](docs/API.md) | The API contract: what is built (`/api/health`, `/api/check`) and what is still planned |
 | [docs/PROJECT_DESCRIPTION.md](docs/PROJECT_DESCRIPTION.md) | The hackathon submission summary: name, problem, approach, results |
 | [PLAN.md](PLAN.md) | What we learned from the dataset, the build plan, team split |

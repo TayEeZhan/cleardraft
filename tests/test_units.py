@@ -23,11 +23,18 @@ def test_parses_mt() -> None:
     assert w.unit == "MT"
 
 
-def test_parses_contract_ton_as_metric_tonne() -> None:
-    w = parse_weight("22.5 TON")
-    assert w is not None
-    assert w.kg == 22500
-    assert w.unit == "TON"
+def test_ton_variants_are_rejected_as_ambiguous() -> None:
+    """"TON" is ambiguous: a US short ton is 907.18 kg, a UK long ton is
+    1016.05 kg, and a metric tonne is 1000 kg - and in freight, a "revenue/
+    measurement ton" is a different concept again (1 m^3 or 1000 kg,
+    whichever is greater). Nothing printed on a shipping document
+    distinguishes which one "TON" means, so TON/TONS/T all fail to parse and
+    the row escalates rather than guessing. MT/MTS/TONNE/TONNES are
+    unambiguous and keep converting at x1000.
+    """
+    assert parse_weight("22.5 TON") is None
+    assert parse_weight("22.5 TONS") is None
+    assert parse_weight("22.5 T") is None
 
 
 def test_parses_lbs() -> None:
