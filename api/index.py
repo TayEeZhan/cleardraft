@@ -21,6 +21,9 @@ Routes:
                                   editable text; see api/_ocr.py
     POST /api/navigate         - AI fallback for the "Find anything"
                                   navigator: see api/_navigate.py
+    POST /api/recheck-field     - "Fix value": re-check a clerk's typed
+                                  SI/BL correction for one field; see
+                                  api/_recheck.py. No AI.
     /api/auth/*, /api/mail*    - accounts: see api/_accounts.py
 
 Accounts note: /api/auth/* and /api/mail* are owned by api/_accounts.py and
@@ -55,6 +58,7 @@ from api._equivalences import lookup_for, router as equivalences_router  # noqa:
 from api._ocr import router as ocr_router  # noqa: E402
 from api._navigate import router as navigate_router  # noqa: E402
 from api._feedback import router as feedback_router  # noqa: E402
+from api._recheck import router as recheck_router  # noqa: E402
 from core import parsers  # noqa: E402
 from core.classify import classify  # noqa: E402
 from core.compare import compare  # noqa: E402
@@ -70,6 +74,7 @@ app = FastAPI()
 app.include_router(accounts_router)
 app.include_router(equivalences_router)
 app.include_router(feedback_router)
+app.include_router(recheck_router)
 app.include_router(dataset_router)
 app.include_router(ocr_router)
 app.include_router(navigate_router)

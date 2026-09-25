@@ -15,6 +15,7 @@ from typing import Callable
 from core.equivalence import EQUIVALENCE_FIELDS
 from core.normalise import normalise
 from core.types import COMPARE_FIELDS, CompareField, ExtractedDoc, FieldComparison, FieldValue
+from core.units import describe_unit_difference
 
 
 def _field_value(doc: "ExtractedDoc | None", field: CompareField) -> "FieldValue | None":
@@ -117,3 +118,58 @@ def compare(
             )
         )
     return tuple(rows)
+
+
+def compare_values(field: str, si: str, bl: str) -> dict:
+    """Re-check two RAW values a clerk typed for one field, with the exact
+    same rule a row read off a document gets in compare() above: normalise
+    both sides, then decide by exact equality after normalisation. No AI,
+    no fuzzy threshold, no equivalence-pair lookup (a "Fix value" correction
+    is a one-off recheck of what the clerk typed, not a taught pair).
+
+    Used by api/_recheck.py's POST /api/recheck-field, and never called
+    directly by the pipeline - it exists so a clerk's typed correction is
+    checked by the SAME deterministic code the pipeline already trusts,
+    not a second copy of the rule.
+
+    Returns:
+        {
+            "status": "match" | "mismatch" | "undecidable",
+            "si_normalised": str | int | None,
+            "bl_normalised": str | int | None,
+            "note": str | None,   # unit-conversion note, gross_weight_kg only
+        }
+
+    Never raises: an unknown field, or normalise()/describe_unit_difference()
+    raising on unexpected input, all collapse to "undecidable" with no note,
+    the same fail-closed discipline as compare() itself.
+    """
+    try:
+        si_norm = normalise(field, si) if field in COMPARE_FIELDS else None
+    except Exception:
+        si_norm = None
+    try:
+        bl_norm = normalise(field, bl) if field in COMPARE_FIELDS else None
+    except Exception:
+        bl_norm = None
+
+    if si_norm is None or bl_norm is None:
+        status = "undecidable"
+    elif si_norm == bl_norm:
+        status = "match"
+    else:
+        status = "mismatch"
+
+    note = None
+    if field == "gross_weight_kg":
+        try:
+            note = describe_unit_difference(si, bl)
+        except Exception:
+            note = None
+
+    return {
+        "status": status,
+        "si_normalised": si_norm,
+        "bl_normalised": bl_norm,
+        "note": note,
+    }

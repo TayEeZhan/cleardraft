@@ -1093,3 +1093,69 @@ body:has(.done-bar) .toast {
 @media (max-width: 620px) {
   .learned-row-head { flex-direction: column; align-items: flex-start; gap: 4px; }
 }
+
+/* ── Fix a value ──────────────────────────────────────────────────
+   "Fix value" button: same solid-pill style as .mark-same-btn/.proof-btn,
+   so a seven-row table doesn't grow a fourth button style. Offered on any
+   mismatched or unreadable field — unlike "Mark as same" it is never
+   limited to the five learnable text fields, so its hover/open colour is
+   the calm teal already used for "resolved, but worth a glance" rows
+   (--converted), not the marine used for a learned pair. */
+.fix-value-btn {
+  background: var(--ink); color: #fff; border: 1px solid var(--ink);
+  font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1.2;
+  padding: 6px 12px; border-radius: 999px; min-height: 32px;
+  display: inline-flex; align-items: center;
+  cursor: pointer; white-space: nowrap; text-decoration: none;
+}
+.fix-value-btn:hover { background: var(--converted); border-color: var(--converted); }
+.fix-value-btn[aria-expanded="true"] { background: var(--converted); border-color: var(--converted); }
+.fix-value-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.fix-value-panel {
+  padding: 12px 14px; background: var(--surface-2); border-top: 1px dashed var(--rule);
+}
+
+/* The two explicitly-chosen modes — "misread" vs "amend" — as a small
+   toggle group, plain words, never inferred from what gets typed below. */
+.fix-value-mode-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.fix-value-mode-btn {
+  font-family: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.3;
+  padding: 8px 12px; border-radius: var(--r); cursor: pointer; text-align: left;
+  background: var(--surface); color: var(--ink-2); border: 1px solid var(--rule-2);
+  min-height: 44px;
+}
+.fix-value-mode-btn[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+.fix-value-mode-btn:hover:not([aria-pressed="true"]) { border-color: var(--ink-3); color: var(--ink); }
+
+.fix-value-hint { font-size: 12px; color: var(--ink-3); margin-bottom: 10px; max-width: 60ch; }
+.fix-value-panel .field-label { margin-top: 8px; }
+.fix-value-panel .field-label:first-of-type { margin-top: 0; }
+.fix-value-input { width: 100%; box-sizing: border-box; margin-bottom: 2px; }
+.fix-value-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+.fix-value-actions .btn { min-height: 38px; padding: 7px 16px; }
+.fix-value-error { margin-top: 10px; }
+
+/* iOS Safari zooms the whole page on focusing any input under 16px — this
+   keeps the corrected-value textareas at the platform's own no-zoom
+   threshold on a phone, without changing their look on desktop. */
+@media (max-width: 620px) {
+  .fix-value-input { font-size: 16px; }
+}
+
+/* Own tone (teal), distinct from "Marked as same" (marine) and an ordinary
+   match (green) — a fixed row is a clerk's correction, not the pipeline's
+   own clean read. */
+.seam-group-fixed {
+  color: var(--converted); background: var(--converted-bg);
+}
+.seam-row[data-state="fixed"] { background: var(--converted-bg); }
+.seam-row[data-state="fixed"] .seam::before { background: var(--converted); }
+.seam-row[data-state="fixed"] .seam::after { content: "\2713"; color: var(--converted); }
+.seam-row[data-state="fixed"] .f-label { color: var(--converted); font-weight: 600; }
+
+.fix-value-audit {
+  padding: 0 14px 12px; background: var(--converted-bg); border-bottom: 1px solid var(--rule);
+  font-size: 12.5px; color: var(--ink-2);
+}
+.fix-value-audit .link-btn { margin-top: 6px; display: inline-flex; align-items: center; min-height: 44px; }

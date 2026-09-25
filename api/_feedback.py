@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from typing import Optional
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -16,6 +18,7 @@ from pydantic import BaseModel
 from adapters.store import Store, get_store
 from api._accounts import current_user
 from core.feedback import is_problem_feedback
+from core.types import COMPARE_FIELDS
 
 router = APIRouter()
 
@@ -24,11 +27,37 @@ MAX_KEY_LENGTH = 300
 MAX_NOTE_LENGTH = 1000
 MAX_REVIEWS_PER_ACCOUNT = 2000
 
+#: "Fix a value": additive to the review record. One correction per field
+#: (si + bl, as the clerk typed them after "Check again"), at most the seven
+#: compared fields, each value bounded the same as api/_recheck.py's request
+#: cap - this is the account-mirrored copy of what the browser already saved
+#: to localStorage, not a new source of truth.
+MAX_CORRECTION_VALUE_LENGTH = 500
+
+#: The two ways a clerk can fix a value (chosen explicitly in the UI, never
+#: inferred): "misread" - ClearDraft read the document wrong, corrected
+#: wording re-checked by POST /api/recheck-field; "amend" - the BL itself is
+#: wrong, and the field stays a discrepancy regardless of `status` below
+#: until the carrier actually amends it.
+ALLOWED_CORRECTION_MODES = frozenset({"misread", "amend"})
+#: POST /api/recheck-field's own answer vocabulary (core.compare.
+#: compare_values). Stored here too so a signed-in account's corrections can
+#: be restored on another device without re-calling that endpoint.
+ALLOWED_CORRECTION_STATUSES = frozenset({"match", "mismatch", "undecidable"})
+
+
+class CorrectionValue(BaseModel):
+    mode: str = "misread"
+    si: str = ""
+    bl: str = ""
+    status: str = "mismatch"
+
 
 class FeedbackRequest(BaseModel):
     key: str
     verdict: str
     note: str = ""
+    corrections: "Optional[dict[str, CorrectionValue]]" = None
 
 
 def _error(status_code: int, error: str, detail: str) -> JSONResponse:
@@ -97,6 +126,35 @@ async def save_feedback(payload: FeedbackRequest, request: Request):
     if payload.verdict == "done" and note.lower().startswith("problem:") and not is_problem_feedback(candidate):
         return _error(400, "note_required", "Explain the problem after 'problem:'.")
 
+    corrections = None
+    if payload.corrections is not None:
+        if len(payload.corrections) > len(COMPARE_FIELDS):
+            return _error(
+                400,
+                "invalid_corrections",
+                f"At most {len(COMPARE_FIELDS)} field corrections per case.",
+            )
+        corrections = {}
+        for field, value in payload.corrections.items():
+            if field not in COMPARE_FIELDS:
+                return _error(400, "invalid_corrections", f"{field!r} is not one of the seven compared fields.")
+            if value.mode not in ALLOWED_CORRECTION_MODES:
+                return _error(400, "invalid_corrections", f"{value.mode!r} is not a valid correction mode.")
+            if value.status not in ALLOWED_CORRECTION_STATUSES:
+                return _error(400, "invalid_corrections", f"{value.status!r} is not a valid correction status.")
+            if len(value.si) > MAX_CORRECTION_VALUE_LENGTH or len(value.bl) > MAX_CORRECTION_VALUE_LENGTH:
+                return _error(
+                    400,
+                    "invalid_corrections",
+                    f"Correction values must be {MAX_CORRECTION_VALUE_LENGTH} characters or fewer.",
+                )
+            # An "amend" correction is, by definition, always still a
+            # discrepancy - the BL is not corrected until the carrier
+            # actually changes it - so its stored status can never be
+            # anything but "mismatch", whatever a caller sends.
+            status = "mismatch" if value.mode == "amend" else value.status
+            corrections[field] = {"mode": value.mode, "si": value.si, "bl": value.bl, "status": status}
+
     reviews = _load_reviews(store, email)
     if key not in reviews and len(reviews) >= MAX_REVIEWS_PER_ACCOUNT:
         return _error(400, "too_many_reviews", f"You can save at most {MAX_REVIEWS_PER_ACCOUNT} reviews.")
@@ -106,6 +164,18 @@ async def save_feedback(payload: FeedbackRequest, request: Request):
         "note": note,
         "at": datetime.now(timezone.utc).isoformat(),
     }
+    # Additive only: a PUT that omits `corrections` (every review save before
+    # this feature existed, and every one from a client that doesn't send it)
+    # must not erase corrections a previous save already recorded for this
+    # same key - so an absent field keeps whatever was there, and only an
+    # explicit (possibly empty) `corrections` object ever replaces it.
+    if corrections is not None:
+        record["corrections"] = corrections
+    else:
+        existing = reviews.get(key)
+        if isinstance(existing, dict) and isinstance(existing.get("corrections"), dict):
+            record["corrections"] = existing["corrections"]
+
     reviews[key] = record
     _save_reviews(store, email, reviews)
     return {"review": record}
