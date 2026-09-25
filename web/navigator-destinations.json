@@ -162,6 +162,12 @@
     "keywords": ["sample from inbox", "inbox sample pair"]
   },
   {
+    "id": "try-to-fool-it",
+    "title": "Try to fool it",
+    "hint": "Type SI/BL values by hand and watch ClearDraft's rule-based verdict update live — no files needed.",
+    "keywords": ["try", "test", "fool", "break", "playground", "edge case", "type values"]
+  },
+  {
     "id": "add-emails",
     "title": "Add emails",
     "hint": "Open the panel to add more of your own emails.",

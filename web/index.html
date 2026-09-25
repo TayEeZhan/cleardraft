@@ -225,52 +225,66 @@
       <p class="lede">Add a Shipping Instruction (SI) and a draft Bill of Lading (BL). See where they differ.</p>
     </div>
 
-    <form id="check-form" class="check-form" novalidate>
-      <div class="drop-grid">
-        <div class="drop-zone" id="drop-si" data-filled="false">
-          <input type="file" id="file-si" class="drop-input" accept=".txt,.pdf,.xlsx,.docx">
-          <label for="file-si" class="drop-label">
-            <span class="drop-title">Shipping Instruction</span>
-            <span class="drop-hint">.txt, .pdf, .xlsx, .docx — click or drop</span>
-            <span class="drop-filename" id="name-si"></span>
-          </label>
+    <div class="check-mode-switch" role="group" aria-label="How to check">
+      <button type="button" class="check-mode-btn" id="check-mode-upload-btn" aria-pressed="true">Upload files</button>
+      <button type="button" class="check-mode-btn" id="check-mode-type-btn" aria-pressed="false">Type values</button>
+    </div>
+
+    <div id="check-mode-upload-panel">
+      <form id="check-form" class="check-form" novalidate>
+        <div class="drop-grid">
+          <div class="drop-zone" id="drop-si" data-filled="false">
+            <input type="file" id="file-si" class="drop-input" accept=".txt,.pdf,.xlsx,.docx">
+            <label for="file-si" class="drop-label">
+              <span class="drop-title">Shipping Instruction</span>
+              <span class="drop-hint">.txt, .pdf, .xlsx, .docx — click or drop</span>
+              <span class="drop-filename" id="name-si"></span>
+            </label>
+          </div>
+          <div class="drop-zone" id="drop-bl" data-filled="false">
+            <input type="file" id="file-bl" class="drop-input" accept=".txt,.pdf,.xlsx,.docx">
+            <label for="file-bl" class="drop-label">
+              <span class="drop-title">Draft Bill of Lading</span>
+              <span class="drop-hint">.txt, .pdf, .xlsx, .docx — click or drop</span>
+              <span class="drop-filename" id="name-bl"></span>
+            </label>
+          </div>
         </div>
-        <div class="drop-zone" id="drop-bl" data-filled="false">
-          <input type="file" id="file-bl" class="drop-input" accept=".txt,.pdf,.xlsx,.docx">
-          <label for="file-bl" class="drop-label">
-            <span class="drop-title">Draft Bill of Lading</span>
-            <span class="drop-hint">.txt, .pdf, .xlsx, .docx — click or drop</span>
-            <span class="drop-filename" id="name-bl"></span>
-          </label>
+
+        <details class="email-details">
+          <summary>Add the email (optional)</summary>
+          <div class="email-fields">
+            <label class="field">
+              <span class="field-label">Subject</span>
+              <input type="text" id="check-subject" class="field-input" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="field-label">Body</span>
+              <textarea id="check-body" class="field-input" rows="4"></textarea>
+            </label>
+          </div>
+        </details>
+
+        <div class="check-actions">
+          <button type="submit" class="btn btn-primary" id="check-submit" disabled>Check these documents</button>
+          <button type="button" class="link-btn" id="use-sample" aria-expanded="false">No files? Try a sample</button>
         </div>
-      </div>
 
-      <details class="email-details">
-        <summary>Add the email (optional)</summary>
-        <div class="email-fields">
-          <label class="field">
-            <span class="field-label">Subject</span>
-            <input type="text" id="check-subject" class="field-input" autocomplete="off">
-          </label>
-          <label class="field">
-            <span class="field-label">Body</span>
-            <textarea id="check-body" class="field-input" rows="4"></textarea>
-          </label>
+        <div class="sample-choice" id="sample-choice" hidden>
+          <button type="button" class="link-btn" id="sample-discrepancies">Sample with errors</button>
+          <button type="button" class="link-btn" id="sample-inbox">Sample from the inbox</button>
         </div>
-      </details>
+      </form>
 
-      <div class="check-actions">
-        <button type="submit" class="btn btn-primary" id="check-submit" disabled>Check these documents</button>
-        <button type="button" class="link-btn" id="use-sample" aria-expanded="false">No files? Try a sample</button>
-      </div>
+      <div id="check-result" class="check-result" aria-live="polite"></div>
+    </div>
 
-      <div class="sample-choice" id="sample-choice" hidden>
-        <button type="button" class="link-btn" id="sample-discrepancies">Sample with errors</button>
-        <button type="button" class="link-btn" id="sample-inbox">Sample from the inbox</button>
-      </div>
-    </form>
-
-    <div id="check-result" class="check-result" aria-live="polite"></div>
+    <div id="check-mode-type-panel" class="check-type-panel" hidden>
+      <p class="lede fool-lede">Try to fool ClearDraft. No AI here — every answer comes from fixed rules.</p>
+      <div class="fool-tricks" id="fool-tricks"></div>
+      <div class="fool-verdict" id="fool-verdict" aria-live="polite"></div>
+      <div class="fool-rows" id="fool-rows"></div>
+    </div>
   </section>
 
   <section id="view-account" class="view" hidden>

@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from core.compare import compare_values
 from core.types import COMPARE_FIELDS
+from core.variance import explain_difference, variance_label
 
 router = APIRouter()
 
@@ -57,13 +58,30 @@ async def recheck_field(payload: RecheckFieldRequest):
         )
 
     result = compare_values(payload.field, payload.si_value, payload.bl_value)
-    return {
+    response: dict[str, object] = {
         "field": payload.field,
         "status": result["status"],
         "si_normalised": result["si_normalised"],
         "bl_normalised": result["bl_normalised"],
         "note": result["note"],
     }
+    # ADDITIVE: only a mismatch gets a "hint" key, so an existing match/
+    # undecidable response body is byte-identical to before this field
+    # existed (see tests/test_recheck_field.py's exact-body assertion).
+    # Reuses core.variance.explain_difference - the same conservative,
+    # display-only pattern matcher a saved case's seam table already uses
+    # (core/variance.py:comparison_variance) - never a new heuristic, and
+    # it never changes `status` above: a hint only explains a discrepancy,
+    # it can never clear one (ADR-001).
+    if result["status"] == "mismatch":
+        try:
+            reason = explain_difference(payload.field, payload.si_value, payload.bl_value)
+        except Exception:
+            reason = None
+        response["hint"] = (
+            {"kind": reason, "label": variance_label(reason)} if reason else None
+        )
+    return response
 
 
 __all__ = ["router"]

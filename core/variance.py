@@ -190,4 +190,27 @@ def comparison_variance(comparison: FieldComparison) -> "str | None":
     return explain_difference(comparison.field, comparison.si.value, comparison.bl.value)
 
 
-__all__ = ["comparison_variance", "explain_difference"]
+#: The same wording as web/app.js's own VARIANCE_LABELS constant, so a hint
+#: reads identically whichever runtime renders it - the "Try to fool it"
+#: panel (api/_recheck.py, this dict) and a saved case's seam table
+#: (web/app.js, its own copy). Duplicated deliberately: the two runtimes
+#: share no module, so there is nowhere for one dict to live for both.
+VARIANCE_LABELS: dict[str, str] = {
+    "punctuation_only": "Punctuation differs",
+    "suffix_abbreviation": "Possible company-suffix abbreviation",
+    "token_reorder": "Same words, different order",
+    "country_suffix": "Possible country suffix",
+    "ampersand_and": "\"&\" vs \"AND\"",
+    "port_alias": "Same port under another name - check and mark as same if correct",
+    "country_variant": "Possible country name/abbreviation variant",
+}
+
+
+def variance_label(reason: "str | None") -> str:
+    """The plain-English label for a variance kind, or the same generic
+    fallback web/app.js's varianceLabel() uses for an unrecognised or
+    missing reason. Never raises: an unknown key just falls back."""
+    return VARIANCE_LABELS.get(reason or "", "Possible formatting variation")
+
+
+__all__ = ["comparison_variance", "explain_difference", "VARIANCE_LABELS", "variance_label"]

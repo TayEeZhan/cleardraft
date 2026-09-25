@@ -1,7 +1,7 @@
 import pytest
 
 from core.types import FieldComparison, FieldValue
-from core.variance import comparison_variance, explain_difference
+from core.variance import comparison_variance, explain_difference, variance_label
 
 
 @pytest.mark.parametrize(
@@ -76,3 +76,12 @@ def test_comparison_hint_never_changes_or_decorates_a_match():
         matched=True,
     )
     assert comparison_variance(matched) is None
+
+
+def test_variance_label_known_reasons_and_fallback():
+    assert variance_label("port_alias") == (
+        "Same port under another name - check and mark as same if correct"
+    )
+    assert variance_label("suffix_abbreviation") == "Possible company-suffix abbreviation"
+    assert variance_label(None) == "Possible formatting variation"
+    assert variance_label("not_a_real_reason") == "Possible formatting variation"

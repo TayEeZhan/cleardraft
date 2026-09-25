@@ -1159,3 +1159,83 @@ body:has(.done-bar) .toast {
   font-size: 12.5px; color: var(--ink-2);
 }
 .fix-value-audit .link-btn { margin-top: 6px; display: inline-flex; align-items: center; min-height: 44px; }
+
+/* ── "Try to fool it" — Check a pair, mode 2 ─────────────────────────
+   Mobile-first: one column by default (label, then SI input, then BL
+   input, then chip + reason, all stacked; tap targets ≥44px; inputs at
+   16px on phones so iOS Safari never zooms on focus). A two-column SI/BL
+   layout only kicks in from 620px, same breakpoint the rest of this file
+   already uses for "does this need a phone or a desktop layout". */
+.check-mode-switch { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.check-mode-btn {
+  font-family: inherit; font-size: 13.5px; font-weight: 600;
+  padding: 9px 16px; min-height: 44px; border-radius: 999px; cursor: pointer;
+  background: var(--surface); color: var(--ink-2); border: 1px solid var(--rule-2);
+}
+.check-mode-btn[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+.check-mode-btn:hover:not([aria-pressed="true"]) { border-color: var(--ink-3); color: var(--ink); }
+
+.check-type-panel { max-width: 720px; }
+.fool-lede { margin-top: 0; margin-bottom: 16px; font-size: 13.5px; color: var(--ink-2); }
+
+.fool-tricks { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.fool-trick-btn {
+  font-family: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.3;
+  padding: 8px 12px; min-height: 44px; border-radius: var(--r); cursor: pointer;
+  background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--rule-2);
+}
+.fool-trick-btn:hover { border-color: var(--ink-3); color: var(--ink); }
+.fool-reset-btn { background: var(--surface); }
+
+.fool-verdict {
+  padding: 12px 14px; border-radius: var(--r); border: 1px solid var(--rule);
+  background: var(--surface-2); font-size: 14px; font-weight: 600; margin-bottom: 18px;
+}
+.fool-verdict[data-kind="mismatch"] { background: var(--mismatch-bg); border-color: #F0C3BF; color: var(--mismatch); }
+.fool-verdict[data-kind="review"]   { background: var(--review-bg);   border-color: #D6CBEE; color: var(--review); }
+.fool-verdict[data-kind="match"]    { background: var(--match-bg);    border-color: #BEDDD3; color: var(--match); }
+
+.fool-rows { display: flex; flex-direction: column; gap: 12px; }
+.fool-row {
+  border: 1px solid var(--rule); border-radius: var(--r); background: var(--surface);
+  padding: 12px 14px;
+}
+.fool-row[data-state="mismatch"] { background: var(--mismatch-bg); border-color: #F0C3BF; }
+.fool-row[data-state="unknown"]  { background: var(--review-bg);   border-color: #D6CBEE; }
+.fool-row-label { font-weight: 600; font-size: 13.5px; margin-bottom: 8px; }
+.fool-row-inputs { display: flex; flex-direction: column; gap: 8px; }
+.fool-input-wrap { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.fool-input-tag { font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .03em; }
+.fool-input { width: 100%; box-sizing: border-box; min-height: 44px; }
+.fool-row-result { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.fool-reason { font-size: 12.5px; color: var(--ink-2); }
+
+@media (min-width: 620px) {
+  .fool-row-inputs { flex-direction: row; gap: 12px; }
+}
+
+/* iOS Safari zooms the whole page on focusing any input under 16px. */
+@media (max-width: 620px) {
+  .fool-input { font-size: 16px; }
+}
+
+/* ── "Why this verdict?" — case page, collapsible plain-language trace ──
+   Closed by default (a bare <details>, no JS needed to toggle); the
+   numbered steps read only what is already in the case detail. */
+.why-panel {
+  margin: 14px 0 24px; border: 1px solid var(--rule); border-radius: var(--r);
+  background: var(--surface); padding: 2px 14px;
+}
+.why-panel summary {
+  cursor: pointer; padding: 10px 0; min-height: 44px; display: flex; align-items: center;
+  font-weight: 600; font-size: 13.5px; list-style: none; color: var(--ink);
+}
+.why-panel summary::-webkit-details-marker { display: none; }
+.why-panel summary::before {
+  content: "▸"; display: inline-block; margin-right: 8px; color: var(--ink-3);
+  transition: transform .1s;
+}
+.why-panel[open] summary::before { transform: rotate(90deg); }
+.why-steps { margin: 0 0 14px; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
+.why-steps li { font-size: 13px; color: var(--ink-2); line-height: 1.45; }
+.why-steps b { color: var(--ink); }

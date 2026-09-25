@@ -186,3 +186,58 @@ def test_endpoint_missing_body_fields_default_to_blank():
     resp = client.post("/api/recheck-field", json={"field": "shipper"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "undecidable"
+
+
+# ---------------------------------------------------------------------------
+# `hint` - additive, mismatch-only (core.variance.explain_difference).
+# Feature: "Try to fool it" (#/check, Type values mode).
+# ---------------------------------------------------------------------------
+def test_endpoint_mismatch_includes_hint_for_suffix_abbreviation():
+    resp = _recheck("shipper", "Ocean Paper Co Ltd", "OCEAN PAPER COMPANY LIMITED")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "mismatch"
+    assert body["hint"] == {
+        "kind": "suffix_abbreviation",
+        "label": "Possible company-suffix abbreviation",
+    }
+
+
+def test_endpoint_mismatch_includes_hint_for_port_alias():
+    resp = _recheck("port_of_loading", "PORT KLANG", "PORT KELANG")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "mismatch"
+    assert body["hint"]["kind"] == "port_alias"
+
+
+def test_endpoint_mismatch_without_a_known_pattern_has_hint_none():
+    """Two genuinely different ports (Dubai / Jebel Ali) must never be
+    handed a same-port hint just because both are in the UAE."""
+    resp = _recheck("port_of_discharge", "DUBAI", "JEBEL ALI")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "mismatch"
+    assert body["hint"] is None
+
+
+def test_endpoint_match_body_has_no_hint_key():
+    """Exact body equality, same as test_endpoint_match above: adding `hint`
+    must never touch a match response's shape."""
+    resp = _recheck("consignee", "EAST BRIGHT FZ-LLC", "EAST BRIGHT FZ-LLC")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "hint" not in body
+    assert body == {
+        "field": "consignee",
+        "status": "match",
+        "si_normalised": "EAST BRIGHT FZ-LLC",
+        "bl_normalised": "EAST BRIGHT FZ-LLC",
+        "note": None,
+    }
+
+
+def test_endpoint_undecidable_body_has_no_hint_key():
+    resp = _recheck("container_count", "40' x 2", "2 x 40'HC")
+    assert resp.status_code == 200
+    assert "hint" not in resp.json()

@@ -1545,6 +1545,150 @@ function yourPartPanel(d, evaluation) {
   return panel;
 }
 
+/* ── "Why this verdict?" — case page only ──────────────────────────────
+   A closed-by-default panel under the verdict, built ONLY from data
+   already in the case detail (d) plus what this browser already tracks
+   client-side (effectiveFor()'s own inputs: EVAL_CACHE, CORRECTIONS,
+   REVIEWS) — no new backend call, no new field on the record. Plain words
+   throughout, never "model", "pipeline" or "gate" (ADR-004/014's own terms,
+   fine for the architecture doc, not for a clerk reading their own case). */
+function readerLabel(path) {
+  const ext = String(path || "").split(".").pop().toLowerCase();
+  if (ext === "pdf") return "PDF";
+  if (ext === "xlsx" || ext === "xls") return "Excel";
+  if (ext === "docx" || ext === "doc") return "Word";
+  return "text";
+}
+
+function whyStep1(d) {
+  const cat = categoryWord(d.category);
+  const how = d.decided_by === "model" ? "by AI" : "by a fixed rule";
+  let text = `Email sorted as ${cat} — ${how}`;
+  if (d.evidence) text += `, evidence "${d.evidence}"`;
+  return `${text}.`;
+}
+
+function whyStep2(d) {
+  const docs = d.documents;
+  const si = docs && docs.si;
+  const bl = docs && docs.bl;
+  if (!si && !bl) {
+    if (d.review_reason === "missing_attachment") {
+      return "Documents found: none — fewer than two files were attached.";
+    }
+    return "Documents found: none — this wasn't an SI/BL comparison.";
+  }
+  const parts = [];
+  for (const [doc, label] of [[si, "SI"], [bl, "BL"]]) {
+    if (!doc) { parts.push(`${label} not attached`); continue; }
+    const name = String(doc.path || "").split("/").pop() || label;
+    if (doc.readable === false) {
+      parts.push(`${label} ${name} could not be read${doc.error ? ` (${doc.error})` : ""}`);
+      continue;
+    }
+    parts.push(`${label} ${name}, reader: ${readerLabel(doc.path)}`);
+  }
+  return `Documents found: ${parts.join("; ")}.`;
+}
+
+function whyStep3(d) {
+  const comparisons = d.comparisons || [];
+  if (!comparisons.length) return "Fields read: not applicable — no fields to read for this email.";
+  let byAi = 0;
+  for (const c of comparisons) {
+    const aiRead = (c.si && c.si.decided_by === "model") || (c.bl && c.bl.decided_by === "model");
+    if (aiRead) byAi++;
+  }
+  const byRule = comparisons.length - byAi;
+  let text = `Fields read: ${byRule} by their label`;
+  if (byAi > 0) text += `, ${byAi} read by AI and placement-checked`;
+  return `${text}.`;
+}
+
+function whyStep4(d) {
+  const comparisons = d.comparisons || [];
+  if (!comparisons.length) return "Compared: not applicable — nothing to compare.";
+  let match = 0, differ = 0, unknown = 0;
+  for (const c of comparisons) {
+    if (c.undecidable) unknown++;
+    else if (c.matched) match++;
+    else differ++;
+  }
+  return `Compared ${comparisons.length} fields: ${match} match, ${differ} differ, ${unknown} couldn't read (after units/normalising).`;
+}
+
+/* core/decide.py's own ladder (see its module docstring), in plain words,
+   picking the rung the case's FINAL status/review_reason actually landed
+   on — the live effective one when a signed-in clerk's Mark-as-same
+   evaluation changed it, otherwise the checked result. */
+const WHY_REASON_TEXT = {
+  unclassified: "Nobody could tell what this email wants → Needs a human.",
+  missing_attachment: "A comparison was asked for but fewer than two documents were attached → Needs a human.",
+  unreadable: "A document could not be read → Needs a human.",
+  wrong_doc_type: "One of the attachments isn't an SI or a BL → Needs a human.",
+  missing_value: "A field couldn't be read → Needs a human.",
+  human_feedback: "A reviewer flagged a problem → Needs a human.",
+};
+
+function whyStep5(d, evaluation) {
+  const status = evaluation ? evaluation.status : d.status;
+  const reason = evaluation ? evaluation.review_reason : d.review_reason;
+  if (status === "MISMATCH") return "Decision rule used: any field differs → Discrepancy.";
+  if (status === "NEEDS_REVIEW") {
+    return `Decision rule used: ${WHY_REASON_TEXT[reason] || "ClearDraft could not decide → Needs a human."}`;
+  }
+  if (d.category !== "BL_COMPARISON" || !(d.comparisons || []).length) {
+    return "Decision rule used: not an SI/BL check → no documents to check.";
+  }
+  return "Decision rule used: every field matched → All clear.";
+}
+
+function whyStep6(d, source) {
+  const parts = [];
+  const covered = source ? coveredFieldsFor(source, d.email_id) : {};
+  const coveredFields = Object.keys(covered);
+  if (coveredFields.length) {
+    parts.push(`marked as same: ${coveredFields.map((f) => FIELD_WORDS[f] || f).join(", ")}`);
+  }
+  const corrections = source ? getCorrections(source, d.email_id) : null;
+  if (corrections && Object.keys(corrections).length) {
+    parts.push(`fixed values: ${Object.keys(corrections).map((f) => FIELD_WORDS[f] || f).join(", ")}`);
+  }
+  const review = source ? getReview(source, d.email_id) : null;
+  if (review) {
+    if (isProblemReview(review)) {
+      const note = String(review.note || "").replace(/^problem:\s*/i, "");
+      parts.push(`feedback: something's wrong${note ? ` — "${note}"` : ""}`);
+    } else if (review.verdict === "confirmed") {
+      parts.push("feedback: looks right, confirmed");
+    }
+  }
+  if (!parts.length) return "Changes by you: none yet.";
+  return `Changes by you: ${parts.join("; ")}.`;
+}
+
+function whyPanel(d, evaluation, source) {
+  const details = document.createElement("details");
+  details.className = "why-panel";
+  const summary = document.createElement("summary");
+  summary.textContent = "Why this verdict?";
+  details.append(summary);
+
+  const ol = document.createElement("ol");
+  ol.className = "why-steps";
+  const steps = [
+    whyStep1(d),
+    whyStep2(d),
+    whyStep3(d),
+    whyStep4(d),
+    whyStep5(d, evaluation),
+    whyStep6(d, source),
+  ];
+  for (const step of steps) ol.append(el("li", null, step));
+  details.append(ol);
+  return details;
+}
+
 /* "Download CSV" on the case page — the exact Full-results rows for just
    this email, built with the same row-builders the inbox export uses so
    the two never disagree. */
@@ -1689,14 +1833,21 @@ function renderReview(id) {
   host.append(caseActions);
   host.append(originalEmailDetails(d));
 
-  const yourPart = yourPartPanel(d, evaluation);
+  // yourPartPanel + whyPanel share the same slot renderVerdict already
+  // exposes ("afterVerdict" — right after the verdict box, before the
+  // seam table), so "Why this verdict?" always lands directly under the
+  // verdict on the case page without renderVerdict itself needing to know
+  // this panel exists (it is also used, without it, by "Check a pair").
+  const afterVerdict = el("div", "case-after-verdict");
+  afterVerdict.append(yourPartPanel(d, evaluation));
+  afterVerdict.append(whyPanel(d, evaluation, source));
   if (d.recheck) {
-    renderVerdict(d, host, { reply: false, afterVerdict: yourPart, evaluation, rerender, source });
+    renderVerdict(d, host, { reply: false, afterVerdict, evaluation, rerender, source });
     host.append(recheckCard(d.recheck, evaluation));
     const recheckDraft = evaluation && evaluation.changed && evaluation.recheck_reply_draft ? evaluation.recheck_reply_draft : d.recheck.reply_draft;
     host.append(replyCard(d, recheckDraft, "Follow-up reply draft", d.reply_draft, Boolean(evaluation && evaluation.changed && evaluation.recheck_reply_draft)));
   } else {
-    renderVerdict(d, host, { afterVerdict: yourPart, evaluation, rerender, source });
+    renderVerdict(d, host, { afterVerdict, evaluation, rerender, source });
   }
 
   host.append(reviewBar(d));
@@ -3316,6 +3467,299 @@ async function loadSample(key) {
   }
 }
 
+/* ── "Try to fool it" — Check a pair, mode 2 ───────────────────────────
+   A second way into the same #/check page, no files: seven rows, one SI
+   value and one BL value each, each one rechecked live against
+   POST /api/recheck-field on every edit — the exact same deterministic
+   core.compare.compare_values() call "Fix a value" already uses
+   (fixValueConfirmPanel above), never a second copy of the rule and never
+   the model. The point of this panel is that a judge can see, directly, that
+   nothing here is AI: every chip and reason line is one HTTP round trip to a
+   pure function. */
+const FOOL_FIELDS = [
+  { field: "shipper", label: "Shipper" },
+  { field: "consignee", label: "Consignee" },
+  { field: "notify_party", label: "Notify party" },
+  { field: "port_of_loading", label: "Port of loading" },
+  { field: "port_of_discharge", label: "Port of discharge" },
+  { field: "container_count", label: "Container count" },
+  { field: "gross_weight_kg", label: "Gross weight" },
+];
+
+/* A clean, fully-matching sample pair, taken from data.json's email_001 (a
+   cleared BL_COMPARISON case where all 7 fields read identically off both
+   documents — see web/public/data.json, detail.email_001.comparisons).
+   Hardcoded rather than read live from DATA so this panel works even before
+   the board's fetch has resolved, and so a judge always sees the same
+   starting point run to run. */
+const FOOL_DEFAULTS = {
+  shipper: "APRIL FAR EAST (M) SDN BHD",
+  consignee: "MOORIM SP CO., LTD",
+  notify_party: "UAB NOVAKOPA",
+  port_of_loading: "PORT KLANG (WESTPORT), MALAYSIA (MYPKG)",
+  port_of_discharge: "CALLAO, PERU (PECLL)",
+  container_count: "1 x 40'HC",
+  gross_weight_kg: "21,577 KG",
+};
+
+/* Each trick fills exactly one row's SI/BL inputs and re-runs the check for
+   it immediately (no debounce wait) — chosen so every one demonstrates a
+   specific, named rule in core/normalise.py, core/units.py or
+   core/variance.py, not a fuzzy guess. */
+const FOOL_TRICKS = [
+  { label: "22 MT vs 22 KG", field: "gross_weight_kg", si: "22 MT", bl: "22 KG" },
+  { label: "22,000 KG vs 22 MT", field: "gross_weight_kg", si: "22,000 KG", bl: "22 MT" },
+  { label: "2 x 40HC + 1 x 20GP", field: "container_count", si: "2 x 40HC + 1 x 20GP", bl: "2 x 40HC + 1 x 20GP" },
+  { label: "CO., LTD vs COMPANY LIMITED", field: "shipper", si: "Ocean Paper Co Ltd", bl: "OCEAN PAPER COMPANY LIMITED" },
+  { label: "& vs AND", field: "shipper", si: "Smith & Sons Trading", bl: "SMITH AND SONS TRADING" },
+  { label: "Port Klang vs Port Kelang", field: "port_of_loading", si: "PORT KLANG", bl: "PORT KELANG" },
+  { label: "Dubai vs Jebel Ali", field: "port_of_discharge", si: "DUBAI", bl: "JEBEL ALI" },
+  { label: "TBA (blank)", field: "notify_party", si: "TBA", bl: "UAB NOVAKOPA" },
+  { label: "Swapped name order", field: "consignee", si: "SMITH JOHN TRADING", bl: "JOHN SMITH TRADING" },
+];
+
+/* field -> { si, bl, result }. `result` mirrors POST /api/recheck-field's
+   own body ({status, si_normalised, bl_normalised, note, hint?}), or null
+   before the first check for that row has come back. */
+let FOOL_STATE = {};
+let FOOL_INITED = false;
+const FOOL_INPUTS = {}; // field -> {siInput, blInput, row, chip, reason}
+const FOOL_DEBOUNCE_MS = 350;
+let foolDebounceTimer = null;
+
+function foolResetState() {
+  FOOL_STATE = {};
+  for (const { field } of FOOL_FIELDS) {
+    FOOL_STATE[field] = { si: FOOL_DEFAULTS[field], bl: FOOL_DEFAULTS[field], result: null };
+  }
+}
+
+/* Overall verdict line, using the SAME precedence core/decide.py uses -
+   escalation beats everything, a proven discrepancy beats a clean row:
+   any row ClearDraft could not decide -> "Needs a human"; else any row
+   that differs -> "N discrepancies found"; else "All match". */
+function foolVerdictText() {
+  const results = FOOL_FIELDS.map(({ field }) => FOOL_STATE[field].result).filter(Boolean);
+  if (results.length < FOOL_FIELDS.length) return { kind: "pending", text: "Checking…" };
+  const undecidable = results.filter((r) => r.status === "undecidable").length;
+  const mismatch = results.filter((r) => r.status === "mismatch").length;
+  if (undecidable > 0) {
+    return { kind: "review", text: "Needs a human — ClearDraft could not decide every field." };
+  }
+  if (mismatch > 0) {
+    return { kind: "mismatch", text: `${mismatch} discrepanc${mismatch === 1 ? "y" : "ies"} found` };
+  }
+  return { kind: "match", text: "All match" };
+}
+
+function renderFoolVerdict() {
+  const host = $("#fool-verdict");
+  if (!host) return;
+  const { kind, text } = foolVerdictText();
+  host.dataset.kind = kind;
+  host.textContent = text;
+}
+
+/* One row's chip + reason, from a POST /api/recheck-field body. Mirrors
+   fieldExplanation()'s wording where it overlaps ("SI says X; draft BL says
+   Y"), but this panel's own copy: it reads a live {status, hint} pair
+   in-memory, not a saved FieldComparison off a case. */
+function foolRowReason(field, si, bl, result) {
+  if (!result) return "";
+  if (result.status === "match") {
+    return result.note ? `Same value once normalised. ${result.note} — unit converted, not a defect.` : "Same value once normalised.";
+  }
+  if (result.status === "undecidable") {
+    return "Could not be read with certainty (blank, or an ambiguous format) — sent to a person rather than guessed at.";
+  }
+  const siNorm = result.si_normalised == null ? "(blank)" : String(result.si_normalised);
+  const blNorm = result.bl_normalised == null ? "(blank)" : String(result.bl_normalised);
+  let text = `Normalised: SI "${siNorm}" vs BL "${blNorm}".`;
+  if (field === "gross_weight_kg" && result.note) text += ` ${result.note}.`;
+  if (result.hint && result.hint.label) text += ` ${result.hint.label}.`;
+  return text;
+}
+
+function foolChipFor(status) {
+  if (status === "match") return { cls: "chip-match", text: "Match" };
+  if (status === "undecidable") return { cls: "chip-review", text: "Can't decide (sent to a person)" };
+  return { cls: "chip-mismatch", text: "Discrepancy" };
+}
+
+function renderFoolRow(field) {
+  const refs = FOOL_INPUTS[field];
+  if (!refs) return;
+  const state = FOOL_STATE[field];
+  const result = state.result;
+  refs.chip.replaceChildren();
+  if (result) {
+    const { cls, text } = foolChipFor(result.status);
+    refs.chip.className = `chip ${cls}`;
+    refs.chip.textContent = text;
+    refs.row.dataset.state = result.status === "match" ? "match" : result.status === "undecidable" ? "unknown" : "mismatch";
+  } else {
+    refs.chip.className = "chip chip-quiet";
+    refs.chip.textContent = "Checking…";
+    delete refs.row.dataset.state;
+  }
+  refs.reason.textContent = foolRowReason(field, state.si, state.bl, result);
+}
+
+/* The stateless POST /api/recheck-field call itself — same endpoint, same
+   core.compare.compare_values() rule, "Fix a value" already trusts
+   (fixValueConfirmPanel above). Never raises: a network failure just leaves
+   the row showing "Can't decide", which is the honest answer when
+   ClearDraft itself could not be reached either. */
+async function foolCheckField(field) {
+  const state = FOOL_STATE[field];
+  try {
+    const r = await fetch("/api/recheck-field", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ field, si_value: state.si, bl_value: state.bl }),
+    });
+    if (!r.ok) {
+      state.result = { status: "undecidable", si_normalised: null, bl_normalised: null, note: null, hint: null };
+    } else {
+      state.result = await r.json();
+    }
+  } catch {
+    state.result = { status: "undecidable", si_normalised: null, bl_normalised: null, note: null, hint: null };
+  }
+  renderFoolRow(field);
+  renderFoolVerdict();
+}
+
+function foolCheckAll() {
+  renderFoolVerdict();
+  for (const { field } of FOOL_FIELDS) foolCheckField(field);
+}
+
+function buildFoolRow(fieldDef) {
+  const { field, label } = fieldDef;
+  const row = el("div", "fool-row");
+  row.append(el("div", "fool-row-label", label));
+
+  const inputsWrap = el("div", "fool-row-inputs");
+
+  function makeInput(side, tag) {
+    const wrap = el("div", "fool-input-wrap");
+    const id = `fool-${field}-${side}`;
+    const tagEl = el("label", "fool-input-tag", tag);
+    tagEl.setAttribute("for", id);
+    wrap.append(tagEl);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.id = id;
+    input.className = "field-input fool-input";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.value = FOOL_STATE[field][side];
+    wrap.append(input);
+    return input;
+  }
+
+  const siInput = makeInput("si", "SI");
+  const blInput = makeInput("bl", "BL");
+  inputsWrap.append(siInput.parentElement, blInput.parentElement);
+  row.append(inputsWrap);
+
+  const resultRow = el("div", "fool-row-result");
+  const chip = el("span", "chip chip-quiet", "Checking…");
+  resultRow.append(chip);
+  row.append(resultRow);
+  const reason = el("div", "fool-reason");
+  row.append(reason);
+
+  FOOL_INPUTS[field] = { siInput, blInput, row, chip, reason };
+
+  function onEdit() {
+    FOOL_STATE[field].si = siInput.value;
+    FOOL_STATE[field].bl = blInput.value;
+    FOOL_STATE[field].result = null;
+    renderFoolRow(field);
+    renderFoolVerdict();
+    clearTimeout(foolDebounceTimer);
+    foolDebounceTimer = setTimeout(() => foolCheckField(field), FOOL_DEBOUNCE_MS);
+  }
+  siInput.addEventListener("input", onEdit);
+  blInput.addEventListener("input", onEdit);
+
+  return row;
+}
+
+function applyFoolTrick(trick) {
+  FOOL_STATE[trick.field].si = trick.si;
+  FOOL_STATE[trick.field].bl = trick.bl;
+  const refs = FOOL_INPUTS[trick.field];
+  if (refs) { refs.siInput.value = trick.si; refs.blInput.value = trick.bl; }
+  clearTimeout(foolDebounceTimer); // a trick is immediate, not debounced
+  foolCheckField(trick.field);
+}
+
+function resetFoolPanel() {
+  foolResetState();
+  for (const { field } of FOOL_FIELDS) {
+    const refs = FOOL_INPUTS[field];
+    if (refs) { refs.siInput.value = FOOL_STATE[field].si; refs.blInput.value = FOOL_STATE[field].bl; }
+  }
+  clearTimeout(foolDebounceTimer);
+  foolCheckAll();
+}
+
+function buildFoolTricks() {
+  const host = $("#fool-tricks");
+  if (!host) return;
+  host.replaceChildren();
+  for (const trick of FOOL_TRICKS) {
+    const btn = el("button", "fool-trick-btn", trick.label);
+    btn.type = "button";
+    btn.addEventListener("click", () => applyFoolTrick(trick));
+    host.append(btn);
+  }
+  const resetBtn = el("button", "fool-trick-btn fool-reset-btn", "Reset");
+  resetBtn.type = "button";
+  resetBtn.addEventListener("click", resetFoolPanel);
+  host.append(resetBtn);
+}
+
+/* Built once, lazily, the first time a clerk actually opens "Type values" —
+   never on page load, so a visitor who never touches this panel never
+   triggers its 7 initial POST /api/recheck-field calls. */
+function ensureFoolPanelBuilt() {
+  if (FOOL_INITED) return;
+  FOOL_INITED = true;
+  foolResetState();
+  const rowsHost = $("#fool-rows");
+  rowsHost.replaceChildren();
+  for (const fieldDef of FOOL_FIELDS) rowsHost.append(buildFoolRow(fieldDef));
+  buildFoolTricks();
+  foolCheckAll();
+}
+
+function setCheckMode(mode) {
+  const uploadBtn = $("#check-mode-upload-btn");
+  const typeBtn = $("#check-mode-type-btn");
+  const uploadPanel = $("#check-mode-upload-panel");
+  const typePanel = $("#check-mode-type-panel");
+  if (!uploadBtn || !typeBtn || !uploadPanel || !typePanel) return;
+  const toType = mode === "type";
+  uploadBtn.setAttribute("aria-pressed", String(!toType));
+  typeBtn.setAttribute("aria-pressed", String(toType));
+  uploadPanel.hidden = toType;
+  typePanel.hidden = !toType;
+  if (toType) ensureFoolPanelBuilt();
+}
+
+function initFoolModeSwitch() {
+  const uploadBtn = $("#check-mode-upload-btn");
+  const typeBtn = $("#check-mode-type-btn");
+  if (!uploadBtn || !typeBtn) return;
+  uploadBtn.addEventListener("click", () => setCheckMode("upload"));
+  typeBtn.addEventListener("click", () => setCheckMode("type"));
+}
+
 function initCheckPage() {
   wireDropZone("drop-si", "file-si", "name-si", "si");
   wireDropZone("drop-bl", "file-bl", "name-bl", "bl");
@@ -3331,6 +3775,8 @@ function initCheckPage() {
   });
   $("#sample-discrepancies").addEventListener("click", () => loadSample("discrepancies"));
   $("#sample-inbox").addEventListener("click", () => loadSample("inbox"));
+
+  initFoolModeSwitch();
 }
 
 /* The main menu / home screen. One primary action, two secondary cards, one

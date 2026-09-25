@@ -316,6 +316,15 @@ const ACTIONS = {
   "check-sample-discrepancies": sampleChoiceGo("sample-discrepancies"),
   "check-sample-inbox": sampleChoiceGo("sample-inbox"),
 
+  "try-to-fool-it": {
+    async go() {
+      await onView("#/check", "view-check")();
+      const btn = $id("check-mode-type-btn");
+      if (btn && btn.getAttribute("aria-pressed") !== "true") btn.click();
+      return $id("fool-verdict") || btn;
+    },
+  },
+
   "add-emails": {
     async go() {
       await onView("#/board", "view-board")();
