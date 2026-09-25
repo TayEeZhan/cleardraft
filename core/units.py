@@ -14,9 +14,15 @@ converts every supported unit to kilograms before the two sides of a shipment ar
 compared, so a genuine 1000x/2.2x mislabelling shows up as a real difference, and a
 same-weight-different-unit case does not show up as one.
 
-The challenge contract treats singular "TON" as a metric tonne, so it converts at
-1000 kg alongside MT/TONNE. Less precise shorthand ("T") and unsupported plural
-"TONS" remain rejected rather than guessed.
+"TON" (singular or plural) and bare "T" are deliberately NOT converted. A US
+short ton is 907.18 kg, a UK long ton is 1016.05 kg, and a metric tonne is
+1000 kg - three different weights that happen to share a word. In freight, a
+"revenue/measurement ton" is a different concept again (1 cubic metre or
+1000 kg, whichever is greater). Nothing printed on a shipping document
+distinguishes which one is meant, so TON/TONS/T all fail to parse and the row
+escalates for a human to resolve rather than guessing which conversion the
+shipper intended. MT/MTS/TONNE/TONNES stay unambiguous - "metric" and "tonne"
+both name the same 1000 kg unit - so those keep converting.
 """
 from __future__ import annotations
 
@@ -57,7 +63,7 @@ _FACTORS: dict[str, Decimal] = {
     "KG": Decimal("1"), "KGS": Decimal("1"), "KGM": Decimal("1"),
     "KILO": Decimal("1"), "KILOS": Decimal("1"),
     "KILOGRAM": Decimal("1"), "KILOGRAMS": Decimal("1"),
-    "MT": Decimal("1000"), "MTS": Decimal("1000"), "TON": Decimal("1000"),
+    "MT": Decimal("1000"), "MTS": Decimal("1000"),
     "TONNE": Decimal("1000"), "TONNES": Decimal("1000"),
     "LB": Decimal("0.45359237"), "LBS": Decimal("0.45359237"),
     "POUND": Decimal("0.45359237"), "POUNDS": Decimal("0.45359237"),
