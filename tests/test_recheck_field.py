@@ -184,6 +184,14 @@ def test_endpoint_weight_unit_note():
     assert body["note"] == "MT vs KG"
 
 
+def test_endpoint_accepts_capitalised_tonne_symbol_from_the_web_app():
+    resp = _recheck("gross_weight_kg", "18.20 T", "18.20 T")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "match"
+    assert body["si_normalised"] == body["bl_normalised"] == 18200
+
+
 def test_endpoint_container_fails_closed():
     resp = _recheck("container_count", "40' x 2", "2 x 40'HC")
     assert resp.status_code == 200

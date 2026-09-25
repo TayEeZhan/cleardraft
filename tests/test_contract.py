@@ -171,6 +171,22 @@ def test_official_lowercase_tonne_symbol_matches_kilograms() -> None:
     assert (weight.si_norm, weight.bl_norm) == (18200, 18200)
 
 
+def test_capitalised_tonne_symbol_matches_after_document_extraction() -> None:
+    """All-caps forms/OCR may render the official ``t`` symbol as ``T``."""
+    from core.types import FieldValue
+
+    tonnes = FieldValue(value="18.20 T", raw="GROSS WEIGHT: 18.20 T", line_no=1, label="GROSS WEIGHT")
+    kilograms = FieldValue(value="18,200 KG", raw="Gross Weight: 18,200 KG", line_no=1, label="Gross Weight")
+    rows = compare_mod.compare(
+        ExtractedDoc(path="x_SI.pdf", kind="SI", fields={"gross_weight_kg": tonnes}),
+        ExtractedDoc(path="x_BL.pdf", kind="BL", fields={"gross_weight_kg": kilograms}),
+    )
+    weight = next(row for row in rows if row.field == "gross_weight_kg")
+    assert weight.undecidable is False
+    assert weight.matched is True
+    assert (weight.si_norm, weight.bl_norm) == (18200, 18200)
+
+
 def test_unsupported_weight_unit_escalates_the_comparison() -> None:
     from core.types import FieldValue
 

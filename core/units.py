@@ -14,16 +14,17 @@ converts every supported unit to kilograms before the two sides of a shipment ar
 compared, so a genuine 1000x/2.2x mislabelling shows up as a real difference, and a
 same-weight-different-unit case does not show up as one.
 
-"TON" (singular or plural) and uppercase "T" are deliberately NOT converted. A US
+"TON" (singular or plural) is deliberately NOT converted. A US
 short ton is 907.18 kg, a UK long ton is 1016.05 kg, and a metric tonne is
 1000 kg - three different weights that happen to share a word. In freight, a
 "revenue/measurement ton" is a different concept again (1 cubic metre or
 1000 kg, whichever is greater). Nothing printed on a shipping document
-distinguishes which one is meant, so TON/TONS/T all fail to parse and the row
+distinguishes which one is meant, so TON/TONS fail to parse and the row
 escalates for a human to resolve rather than guessing which conversion the
-shipper intended. Lowercase "t" is different: it is the internationally
-standardised symbol for the tonne, exactly 1000 kg, so it is accepted alongside
-MT/MTS/TONNE/TONNES.
+shipper intended. The one-letter symbol "t" is different: it is the
+internationally standardised symbol for the tonne, exactly 1000 kg. Document
+forms and extractors routinely capitalise unit symbols, so both ``t`` and ``T``
+are accepted alongside MT/MTS/TONNE/TONNES in this gross-weight context.
 """
 from __future__ import annotations
 
@@ -47,8 +48,8 @@ _DOT_THOUSANDS = re.compile(r"^\d{1,3}(?:\.\d{3})+$")
 _COMMA_THOUSANDS = re.compile(r"^\d{1,3}(?:,\d{3})+$")
 
 #: canonical unit -> factor to multiply the parsed number by to get kilograms.
-#: EXACTLY these tokens - see module docstring for why uppercase T/TONS/QTL are
-#: absent and lowercase t is present.
+#: EXACTLY these tokens - see module docstring for why TON/TONS/QTL are absent
+#: while both renderings of the one-letter tonne symbol are present.
 #:
 #: MT/MTS/TONNE/TONNES are exact at x1000 - that is the realistic case in this
 #: dataset (every planted weight defect is a whole MT/KG relabelling). LB/LBS are
@@ -65,7 +66,7 @@ _FACTORS: dict[str, Decimal] = {
     "KG": Decimal("1"), "KGS": Decimal("1"), "KGM": Decimal("1"),
     "KILO": Decimal("1"), "KILOS": Decimal("1"),
     "KILOGRAM": Decimal("1"), "KILOGRAMS": Decimal("1"),
-    "t": Decimal("1000"),
+    "t": Decimal("1000"), "T": Decimal("1000"),
     "MT": Decimal("1000"), "MTS": Decimal("1000"),
     "TONNE": Decimal("1000"), "TONNES": Decimal("1000"),
     "LB": Decimal("0.45359237"), "LBS": Decimal("0.45359237"),
@@ -102,9 +103,10 @@ def _coerce_text(value: object) -> "str | None":
 def _canonical_unit(raw: str) -> str:
     """Normalise unit spelling without destroying the case-sensitive tonne symbol.
 
-    The SI symbol ``t`` means exactly one metric tonne. Uppercase ``T`` is not
-    that symbol and remains unsupported. Other accepted shipping units remain
-    case-insensitive (``m/t`` -> ``MT``, ``KGS.`` -> ``KGS``).
+    The SI symbol ``t`` means exactly one metric tonne. Preserve it when it is
+    available; an extractor- or form-capitalised ``T`` remains supported by the
+    explicit factor table. Other accepted shipping units remain case-insensitive
+    (``m/t`` -> ``MT``, ``KGS.`` -> ``KGS``).
     """
     cleaned = raw.replace(".", "").replace("/", "").replace(" ", "")
     if cleaned == "t":

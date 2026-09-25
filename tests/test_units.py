@@ -30,18 +30,19 @@ def test_parses_official_lowercase_tonne_symbol() -> None:
     assert w.unit == "t"
 
 
-def test_ton_variants_are_rejected_as_ambiguous() -> None:
+def test_capitalised_tonne_symbol_is_supported_but_ton_words_are_ambiguous() -> None:
     """"TON" is ambiguous: a US short ton is 907.18 kg, a UK long ton is
     1016.05 kg, and a metric tonne is 1000 kg - and in freight, a "revenue/
     measurement ton" is a different concept again (1 m^3 or 1000 kg,
     whichever is greater). Nothing printed on a shipping document
-    distinguishes which one "TON" means, so TON/TONS/uppercase T all fail to
-    parse and the row escalates rather than guessing. The official lowercase
-    symbol "t" and MT/MTS/TONNE/TONNES are unambiguous and convert at x1000.
+    distinguishes which one "TON" means, so TON/TONS fail to parse and the row
+    escalates rather than guessing. The one-letter tonne symbol is unambiguous;
+    both t and its commonly capitalised document rendering T convert at x1000.
     """
     assert parse_weight("22.5 TON") is None
     assert parse_weight("22.5 TONS") is None
-    assert parse_weight("22.5 T") is None
+    assert parse_weight("22.5 T").kg == 22500
+    assert parse_weight("22.5 T").unit == "T"
 
 
 def test_parses_lbs() -> None:

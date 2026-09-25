@@ -94,6 +94,7 @@ def test_weight_accepts_formatted_and_raw_xlsx_values() -> None:
 def test_weight_converts_supported_units_to_kilograms() -> None:
     assert normalise_weight("22 MT") == 22000
     assert normalise_weight("18.20 t") == 18200
+    assert normalise_weight("18.20 T") == 18200
     assert normalise_weight("22.5 TONNE") == 22500
     assert normalise_weight("22.5 MTS") == 22500
     assert normalise_weight("22,046.226 LBS") == 10000
@@ -166,7 +167,6 @@ def test_same_weight_in_different_units_matches() -> None:
 def test_unsupported_weight_unit_escalates() -> None:
     assert normalise_weight("22 QTL") is None
     assert normalise_weight("22 TONS") is None
-    assert normalise_weight("22 T") is None
 
 
 def test_weight_decimal_survives_conversion() -> None:
