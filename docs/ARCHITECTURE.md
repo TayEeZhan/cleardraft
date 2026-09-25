@@ -276,6 +276,10 @@ downloads land in a private per-instance temp directory keyed by a flattened,
 validated name. Every request carries a timeout, and an unreachable server
 raises a `ConnectionError` naming the URL, not a bare socket traceback.
 
+*ADR-008, ADR-009 and ADR-010 were drafted and never adopted. ADR numbers are
+never reused or renumbered, so the gap between ADR-007 and ADR-011 is
+deliberate, not a missing file.*
+
 ### ADR-011 — Learned equivalences: exact pairs, per account, live path only.
 
 **Status.** Proposed. **Deciders.** Sheng Kuan (pending Ee Zhan).
@@ -396,6 +400,51 @@ pair's inline edit form.
 - Bounded and reversible: at most 500 pairs per account, each value at most
   200 characters, every pair attributed (who, when, source) and undoable in
   one click, both from the row it cleared and from the account page.
+
+### ADR-012 — A weight carries its unit; an unrecognised unit escalates.
+
+**Decision.** `core/normalise.py` used to strip every non-digit character
+before comparing two weights, including the unit, so `22 MT` and `22 KG` both
+became `22` and a 1000x error read as a clean match, while `22 MT` and
+`22,000 KG` — the same weight — read as a discrepancy. `core/units.py` now
+converts the KG/MT/LBS unit families to kilograms before either side is
+compared; anything outside that set returns `None` and the row escalates.
+
+**Why.** The unit is part of the value, not noise to delete. Treating it as
+noise made both directions of error silent, because `normalise_weight`
+returned a clean int either way and nothing downstream ever saw a problem.
+
+**Trade-off.** Pounds-to-kilograms is lossy at kilogram precision: `48,500
+LBS` is `21999.229945` kg, which rounds to `21999`, one kilogram short of
+`22,000 KG` even though a human would call them the same weight. No tolerance
+is added to paper over that gap, because `core/normalise.py:14-16` already
+rules out fuzzy thresholds — every fuzzy threshold risks swallowing a real
+defect, so this 1 kg pound-rounding gap escalates like any other difference
+instead of being silently forgiven. A same-weight-different-unit pair gets its
+own `converted` row state instead of reading as a defect.
+
+**Evidence.** `core/units.py:_FACTORS`, `core/units.py:describe_unit_difference`.
+
+### ADR-013 — A container quantity is a composition, not a total.
+
+**Decision.** `core/containers.py` parses a `Composition` — a total plus an
+optional per-size breakdown — instead of a bare count, and `container_verdict`
+returns agree/differ/unverifiable; `compare()` gates the container field on
+that verdict.
+
+**Why.** Six 40-foot boxes and six 20-foot boxes are both "6". A total-only
+comparison cannot tell them apart, and a mix of container sizes is exactly
+the kind of substitution a planted defect would use. When one side lists
+sizes and the other does not, the other document's full text is checked
+before falling back to unverifiable, because on a real Bill of Lading the
+count and the equipment type often sit in different boxes on the page.
+
+**Trade-off, stated plainly.** `normalise_container_count` still sums mixed
+groups, reversing commit `15c49b1`, and that is only safe because of the
+gate in front of it: summing alone would make `2 x 40HC + 1 x 20GP` equal
+`1 x 40HC + 2 x 20GP`. `container_verdict` is what catches that case before
+the sum is ever used to decide agreement; the sum survives only as a display
+total once the composition has already agreed.
 
 ### ADR-014 — Model evidence must be in the correct field, not merely present.
 
