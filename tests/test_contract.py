@@ -156,6 +156,21 @@ def test_supported_weight_units_are_compared_in_kilograms() -> None:
     assert (weight.si_norm, weight.bl_norm) == (22000, 22)
 
 
+def test_official_lowercase_tonne_symbol_matches_kilograms() -> None:
+    from core.types import FieldValue
+
+    tonnes = FieldValue(value="18.20 t", raw="Gross Weight: 18.20 t", line_no=1, label="Gross Weight")
+    kilograms = FieldValue(value="18,200 KG", raw="Gross Weight: 18,200 KG", line_no=1, label="Gross Weight")
+    rows = compare_mod.compare(
+        ExtractedDoc(path="x_SI.pdf", kind="SI", fields={"gross_weight_kg": tonnes}),
+        ExtractedDoc(path="x_BL.pdf", kind="BL", fields={"gross_weight_kg": kilograms}),
+    )
+    weight = next(row for row in rows if row.field == "gross_weight_kg")
+    assert weight.undecidable is False
+    assert weight.matched is True
+    assert (weight.si_norm, weight.bl_norm) == (18200, 18200)
+
+
 def test_unsupported_weight_unit_escalates_the_comparison() -> None:
     from core.types import FieldValue
 
