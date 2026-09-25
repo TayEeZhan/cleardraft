@@ -2581,9 +2581,56 @@ function seamTable(d, ctx = {}) {
    email_id + which reply) so navigating away and back keeps them. Primary
    action opens a pre-filled compose window straight in Gmail; ClearDraft
    still never sends anything — the clerk checks it and presses Send. */
+function replyDraftKey(d, earlier = false) {
+  return `${d.email_id || "adhoc"}::${earlier ? "recheck" : "reply"}`;
+}
+
+function replyFieldId(d, earlier = false) {
+  return `reply-text-${replyDraftKey(d, earlier).replace(/[^a-zA-Z0-9]+/g, "-")}`;
+}
+
+function replySubject(d) {
+  const subject = d.subject || "Shipping documents";
+  return /^re[:_]/i.test(subject) ? subject : `RE: ${subject}`;
+}
+
+/* Read the visible textarea first so the review-bar shortcut uses even the
+   latest keystroke. Fall back to the session edit cache, then the generated
+   draft, when the card is not currently mounted. */
+function currentReplyText(d, earlier = false) {
+  const field = document.getElementById(replyFieldId(d, earlier));
+  if (field) return field.value;
+  const key = replyDraftKey(d, earlier);
+  return EDITS.has(key) ? EDITS.get(key) : (earlier && d.recheck ? d.recheck.reply_draft : d.reply_draft) || "";
+}
+
+async function openReplyInGmail(d, text, fallbackField = null) {
+  const subject = replySubject(d);
+  const toPart = d.from ? `&to=${encodeURIComponent(d.from)}` : "";
+  const url = `https://mail.google.com/mail/?view=cm&fs=1${toPart}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
+
+  REPLY_OPENED.add(d.email_id);
+  refreshDoneBarForReply(d);
+
+  if (url.length > 7500) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      if (fallbackField) {
+        fallbackField.focus();
+        fallbackField.select();
+      }
+    }
+    toast("Too long for Gmail. Reply copied. Paste it in.");
+    return;
+  }
+
+  window.open(url, "_blank", "noopener");
+  toast("Gmail opened with your reply. Check it, then press Send.");
+}
+
 function replyCard(d, text, title, earlier, redrafted = false) {
-  const which = earlier ? "recheck" : "reply";
-  const key = `${d.email_id || "adhoc"}::${which}`;
+  const key = replyDraftKey(d, Boolean(earlier));
   const draftText = text || "";
   const startText = EDITS.has(key) ? EDITS.get(key) : draftText;
   const hadEdit = EDITS.has(key);
@@ -2608,7 +2655,7 @@ function replyCard(d, text, title, earlier, redrafted = false) {
   head.append(metaRow);
   card.append(head);
 
-  const fieldId = `reply-text-${key.replace(/[^a-zA-Z0-9]+/g, "-")}`;
+  const fieldId = replyFieldId(d, Boolean(earlier));
   const label = el("label", "visually-hidden", "Reply text");
   label.setAttribute("for", fieldId);
   card.append(label);
@@ -2622,7 +2669,7 @@ function replyCard(d, text, title, earlier, redrafted = false) {
   ta.value = startText;
   card.append(ta);
 
-  const subject = /^re[:_]/i.test(d.subject) ? d.subject : `RE: ${d.subject}`;
+  const subject = replySubject(d);
   function mailtoHref(t) {
     return `mailto:${encodeURIComponent(d.from || "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(t)}`;
   }
@@ -2677,25 +2724,7 @@ function replyCard(d, text, title, earlier, redrafted = false) {
 
   const gmailBtn = el("button", "btn btn-primary", "Open in Gmail");
   gmailBtn.type = "button";
-  gmailBtn.addEventListener("click", async () => {
-    REPLY_OPENED.add(d.email_id);
-    refreshDoneBarForReply(d);
-    const currentText = ta.value;
-    const toPart = d.from ? `&to=${encodeURIComponent(d.from)}` : "";
-    const url = `https://mail.google.com/mail/?view=cm&fs=1${toPart}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(currentText)}`;
-    if (url.length > 7500) {
-      try {
-        await navigator.clipboard.writeText(currentText);
-      } catch {
-        ta.focus();
-        ta.select();
-      }
-      toast("Too long for Gmail. Reply copied. Paste it in.");
-      return;
-    }
-    window.open(url, "_blank", "noopener");
-    toast("Gmail opened with your reply. Check it, then press Send.");
-  });
+  gmailBtn.addEventListener("click", () => openReplyInGmail(d, ta.value, ta));
   foot.append(gmailBtn);
 
   const copyBtn = el("button", "btn btn-quiet", "Copy text");
@@ -2870,12 +2899,15 @@ function refreshDoneBarForReply(d) {
   if (!bar) return;
   const noteForm = bar.querySelector(".review-flag-form");
   if (noteForm && !noteForm.hidden) {
-    if (effectiveKind(d) === "mismatch") {
+    const kind = effectiveKind(d);
+    const missingDocs = kind === "review" && d.review_reason === "missing_attachment";
+    if (kind === "mismatch" || missingDocs) {
       if (!bar.querySelector(".reply-opened-chip")) {
-        bar.insertBefore(el("span", "chip chip-quiet reply-opened-chip", "Reply opened"), bar.firstChild);
+        const chipText = missingDocs ? "Request draft opened" : "Reply opened";
+        bar.insertBefore(el("span", "chip chip-quiet reply-opened-chip", chipText), bar.firstChild);
       }
       const primary = bar.querySelector(".done-bar-actions .btn-primary");
-      if (primary) primary.textContent = "I sent it — next case";
+      if (primary) primary.textContent = missingDocs ? "I sent the request — next case" : "I sent it — next case";
     }
     return;
   }
@@ -2977,9 +3009,18 @@ function reviewBar(d) {
     // to "agree" — asking the sender for the missing documents is the real
     // next step, so the button and the saved note both say that instead.
     const missingDocs = d.review_reason === "missing_attachment";
-    const checkedBtn = el("button", "btn btn-primary", missingDocs ? "Asked sender for the documents" : "I checked — documents agree");
+    const requestOpened = missingDocs && REPLY_OPENED.has(id);
+    if (requestOpened) bar.append(el("span", "chip chip-quiet reply-opened-chip", "Request draft opened"));
+    const checkedLabel = missingDocs
+      ? requestOpened ? "I sent the request — next case" : "Ask sender in Gmail"
+      : "I checked — documents agree";
+    const checkedBtn = el("button", "btn btn-primary", checkedLabel);
     checkedBtn.type = "button";
     checkedBtn.addEventListener("click", () => {
+      if (missingDocs && !REPLY_OPENED.has(id)) {
+        openReplyInGmail(d, currentReplyText(d), document.getElementById(replyFieldId(d)));
+        return;
+      }
       setReview(source, id, "done", missingDocs ? "asked sender for the documents" : "checked by hand: documents agree");
       const undo = confirmToast(d, missingDocs ? "Noted" : "Checked", source);
       if (!context) return;
