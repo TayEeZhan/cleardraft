@@ -95,7 +95,8 @@ def test_feedback_validation(client, payload, error):
 
 def test_feedback_corrections_round_trip(client):
     """"Fix a value": PUT /api/feedback's schema, extended additively with
-    an optional `corrections` map (api/_feedback.py)."""
+    an optional `corrections` map (api/_feedback.py). mode/status default to
+    "misread"/"mismatch" when a caller (e.g. an older client) omits them."""
     signup(client)
     saved = client.put(
         "/api/feedback",
@@ -103,15 +104,64 @@ def test_feedback_corrections_round_trip(client):
             "key": "mine:mail-1",
             "verdict": "confirmed",
             "note": "",
-            "corrections": {"consignee": {"si": "EAST BRIGHT FZ-LLC", "bl": "EAST BRIGHT FZ-LLC"}},
+            "corrections": {
+                "consignee": {
+                    "mode": "misread",
+                    "si": "EAST BRIGHT FZ-LLC",
+                    "bl": "EAST BRIGHT FZ-LLC",
+                    "status": "match",
+                }
+            },
         },
     )
     assert saved.status_code == 200
     record = saved.json()["review"]
-    assert record["corrections"] == {"consignee": {"si": "EAST BRIGHT FZ-LLC", "bl": "EAST BRIGHT FZ-LLC"}}
+    assert record["corrections"] == {
+        "consignee": {"mode": "misread", "si": "EAST BRIGHT FZ-LLC", "bl": "EAST BRIGHT FZ-LLC", "status": "match"}
+    }
 
     listed = client.get("/api/feedback")
     assert listed.json()["reviews"]["mine:mail-1"]["corrections"] == record["corrections"]
+
+
+def test_feedback_corrections_default_mode_and_status(client):
+    """A caller that sends si/bl only (no mode/status) still round-trips -
+    additive defaults, not a required field a pre-existing client would break on."""
+    signup(client)
+    saved = client.put(
+        "/api/feedback",
+        json={
+            "key": "mine:mail-1",
+            "verdict": "confirmed",
+            "note": "",
+            "corrections": {"consignee": {"si": "A", "bl": "B"}},
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["review"]["corrections"] == {
+        "consignee": {"mode": "misread", "si": "A", "bl": "B", "status": "mismatch"}
+    }
+
+
+def test_feedback_corrections_amend_mode_always_stores_mismatch(client):
+    """An "amend" correction is a discrepancy by definition - the BL is not
+    corrected until the carrier actually amends it - so whatever `status` a
+    caller sends is overridden to "mismatch" when mode is "amend"."""
+    signup(client)
+    saved = client.put(
+        "/api/feedback",
+        json={
+            "key": "mine:mail-1",
+            "verdict": "confirmed",
+            "note": "",
+            "corrections": {
+                "consignee": {"mode": "amend", "si": "A", "bl": "SHOULD BE THIS", "status": "match"}
+            },
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["review"]["corrections"]["consignee"]["status"] == "mismatch"
+    assert saved.json()["review"]["corrections"]["consignee"]["mode"] == "amend"
 
 
 def test_feedback_corrections_are_additive_when_omitted(client):
@@ -132,7 +182,9 @@ def test_feedback_corrections_are_additive_when_omitted(client):
         json={"key": "mine:mail-1", "verdict": "confirmed", "note": "updated note"},
     )
     assert saved.status_code == 200
-    assert saved.json()["review"]["corrections"] == {"consignee": {"si": "A", "bl": "B"}}
+    assert saved.json()["review"]["corrections"] == {
+        "consignee": {"mode": "misread", "si": "A", "bl": "B", "status": "mismatch"}
+    }
     assert saved.json()["review"]["note"] == "updated note"
 
 
@@ -160,6 +212,36 @@ def test_feedback_corrections_reject_oversized_values(client):
             "verdict": "confirmed",
             "note": "",
             "corrections": {"consignee": {"si": "x" * 501, "bl": "y"}},
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_corrections"
+
+
+def test_feedback_corrections_reject_unknown_mode(client):
+    signup(client)
+    resp = client.put(
+        "/api/feedback",
+        json={
+            "key": "mine:mail-1",
+            "verdict": "confirmed",
+            "note": "",
+            "corrections": {"consignee": {"mode": "guess", "si": "A", "bl": "B"}},
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_corrections"
+
+
+def test_feedback_corrections_reject_unknown_status(client):
+    signup(client)
+    resp = client.put(
+        "/api/feedback",
+        json={
+            "key": "mine:mail-1",
+            "verdict": "confirmed",
+            "note": "",
+            "corrections": {"consignee": {"si": "A", "bl": "B", "status": "maybe"}},
         },
     )
     assert resp.status_code == 400

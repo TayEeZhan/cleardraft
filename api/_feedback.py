@@ -34,10 +34,23 @@ MAX_REVIEWS_PER_ACCOUNT = 2000
 #: to localStorage, not a new source of truth.
 MAX_CORRECTION_VALUE_LENGTH = 500
 
+#: The two ways a clerk can fix a value (chosen explicitly in the UI, never
+#: inferred): "misread" - ClearDraft read the document wrong, corrected
+#: wording re-checked by POST /api/recheck-field; "amend" - the BL itself is
+#: wrong, and the field stays a discrepancy regardless of `status` below
+#: until the carrier actually amends it.
+ALLOWED_CORRECTION_MODES = frozenset({"misread", "amend"})
+#: POST /api/recheck-field's own answer vocabulary (core.compare.
+#: compare_values). Stored here too so a signed-in account's corrections can
+#: be restored on another device without re-calling that endpoint.
+ALLOWED_CORRECTION_STATUSES = frozenset({"match", "mismatch", "undecidable"})
+
 
 class CorrectionValue(BaseModel):
+    mode: str = "misread"
     si: str = ""
     bl: str = ""
+    status: str = "mismatch"
 
 
 class FeedbackRequest(BaseModel):
@@ -125,13 +138,22 @@ async def save_feedback(payload: FeedbackRequest, request: Request):
         for field, value in payload.corrections.items():
             if field not in COMPARE_FIELDS:
                 return _error(400, "invalid_corrections", f"{field!r} is not one of the seven compared fields.")
+            if value.mode not in ALLOWED_CORRECTION_MODES:
+                return _error(400, "invalid_corrections", f"{value.mode!r} is not a valid correction mode.")
+            if value.status not in ALLOWED_CORRECTION_STATUSES:
+                return _error(400, "invalid_corrections", f"{value.status!r} is not a valid correction status.")
             if len(value.si) > MAX_CORRECTION_VALUE_LENGTH or len(value.bl) > MAX_CORRECTION_VALUE_LENGTH:
                 return _error(
                     400,
                     "invalid_corrections",
                     f"Correction values must be {MAX_CORRECTION_VALUE_LENGTH} characters or fewer.",
                 )
-            corrections[field] = {"si": value.si, "bl": value.bl}
+            # An "amend" correction is, by definition, always still a
+            # discrepancy - the BL is not corrected until the carrier
+            # actually changes it - so its stored status can never be
+            # anything but "mismatch", whatever a caller sends.
+            status = "mismatch" if value.mode == "amend" else value.status
+            corrections[field] = {"mode": value.mode, "si": value.si, "bl": value.bl, "status": status}
 
     reviews = _load_reviews(store, email)
     if key not in reviews and len(reviews) >= MAX_REVIEWS_PER_ACCOUNT:

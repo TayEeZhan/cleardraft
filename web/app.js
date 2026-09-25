@@ -299,9 +299,21 @@ function clearReview(source, id) {
    mirrored to the signed-in account's saved review when one already exists
    (PUT /api/feedback's schema, extended additively with `corrections` — see
    api/_feedback.py). Keyed the same way as REVIEWS: reviewKey(source, id)
-   -> { field: { si, bl, status, note, at } }, where `status` is
-   POST /api/recheck-field's answer ("match" | "mismatch" | "undecidable")
-   for exactly the si/bl wording saved here. */
+   -> { field: { mode, si, bl, status, note, at } }.
+
+   Two distinct, explicitly-chosen modes (never inferred from the text
+   typed):
+     "misread" — ClearDraft read the document wrong. The clerk corrects
+       what the SI and/or BL actually SAY; `status` is POST /api/recheck-
+       field's answer ("match" | "mismatch" | "undecidable") for exactly
+       that wording, and a "match" clears the field like any other proven
+       match.
+     "amend"   — the BL itself is wrong. The clerk types what it SHOULD
+       say; `bl` holds that target wording, `status` is always "mismatch"
+       — this can never clear the field, because the document on file is
+       still wrong until the carrier actually amends it. The reply's
+       amendment line asks for exactly this wording instead of restating
+       what was read. */
 function correctionsStorageKey() {
   return ACCOUNT.user ? `cleardraft.corrections.v1:${ACCOUNT.user.email}` : "cleardraft.corrections.v1";
 }
@@ -358,10 +370,10 @@ async function persistCorrections(source, id) {
   } catch { /* local cache remains the fallback */ }
 }
 
-function setCorrection(source, id, field, si, bl, status, note) {
+function setCorrection(source, id, field, mode, si, bl, status, note) {
   const key = reviewKey(source, id);
   const existing = { ...(CORRECTIONS[key] || {}) };
-  existing[field] = { si, bl, status, note: note || "", at: new Date().toISOString() };
+  existing[field] = { mode, si, bl, status, note: note || "", at: new Date().toISOString() };
   CORRECTIONS[key] = existing;
   saveCorrections();
   void persistCorrections(source, id);
@@ -377,6 +389,38 @@ function clearCorrection(source, id, field) {
   else delete CORRECTIONS[key];
   saveCorrections();
   void persistCorrections(source, id);
+}
+
+/* Folds each remote review's `corrections` (api/_feedback.py's schema — the
+   status/mode are stored server-side too, so no /api/recheck-field re-call
+   is needed here) into CORRECTIONS, same "remote wins when newer, offline
+   edits still local" spirit as loadFeedback()'s own REVIEWS merge just
+   below. Called from loadFeedback() so a second device's corrections show
+   up here, and from afterSignedIn() before that fetch even lands so a
+   previous account's corrections never linger on screen (CORRECTIONS is
+   reloaded fresh under the new account-scoped key first). */
+function mergeCorrectionsFromReviews(remoteReviews) {
+  let changed = false;
+  for (const [key, review] of Object.entries(remoteReviews || {})) {
+    if (!review || typeof review !== "object") continue;
+    const remoteCorrections = review.corrections;
+    if (!remoteCorrections || typeof remoteCorrections !== "object") continue;
+    const merged = { ...(CORRECTIONS[key] || {}) };
+    for (const [field, fix] of Object.entries(remoteCorrections)) {
+      if (!fix || typeof fix !== "object") continue;
+      merged[field] = {
+        mode: fix.mode === "amend" ? "amend" : "misread",
+        si: typeof fix.si === "string" ? fix.si : "",
+        bl: typeof fix.bl === "string" ? fix.bl : "",
+        status: fix.status === "match" || fix.status === "undecidable" ? fix.status : "mismatch",
+        note: "",
+        at: review.at || new Date().toISOString(),
+      };
+      changed = true;
+    }
+    if (Object.keys(merged).length) CORRECTIONS[key] = merged;
+  }
+  if (changed) saveCorrections();
 }
 
 async function loadFeedback() {
@@ -395,6 +439,7 @@ async function loadFeedback() {
     }
     REVIEWS = merged;
     saveReviews();
+    mergeCorrectionsFromReviews(remote);
     // A review recorded offline is uploaded after connectivity returns.
     for (const [key, review] of Object.entries(local)) {
       if (!remote[key] || (Date.parse(review.at || "") || 0) > (Date.parse(remote[key].at || "") || 0)) {
@@ -650,21 +695,6 @@ async function evaluateBoardBatch(source) {
   return changed; /* any chunk that failed just leaves its cases uncached - board falls back to checked results for those */
 }
 
-/* The effective status/defect count for a board row: the cached evaluation
-   when one exists, otherwise the checked result. Used by tabOf()/counts/tags
-   so the board reflects marked-as-same pairs live. */
-function effectiveFor(source, row) {
-  const cache = EVAL_CACHE[source];
-  const ev = cache && cache.get(row.email_id);
-  const base = ev
-    ? { status: ev.status || row.status, review_reason: ev.review_reason || row.review_reason,
-        defect_fields: ev.defect_fields || row.defect_fields || [], changed: Boolean(ev.changed) }
-    : { status: row.status, review_reason: row.review_reason,
-        defect_fields: row.defect_fields || [], changed: false };
-  if (!isProblemReview(getReview(source, row.email_id))) return base;
-  return { ...base, status: "NEEDS_REVIEW", review_reason: "human_feedback", changed: true, human_feedback: true };
-}
-
 /* Field order for effective-status recomputation — mirrors
    core.types.COMPARE_FIELDS exactly, so a rebuilt defect_fields list orders
    the same way the pipeline's own does. */
@@ -673,25 +703,114 @@ const COMPARE_FIELD_ORDER = [
   "port_of_discharge", "container_count", "gross_weight_kg",
 ];
 
+/* "Fix a value" is a LAYER applied on top of effectiveFor()'s own base
+   result — never written into EVAL_CACHE. EVAL_CACHE is Mark-as-same's own
+   cache of a server evaluation; writing corrections into it would collide
+   with (and starve) that evaluation the moment both apply to the same case
+   (evaluateCaseLive()/evaluateBoardBatch() skip a case EVAL_CACHE already
+   has an entry for). Layering keeps the two independent and composable:
+   raw pipeline result -> Mark-as-same evaluation (EVAL_CACHE, if any) ->
+   corrections (this function, live, every call) -> human-feedback override
+   (effectiveFor()'s own last step, unchanged).
+
+   Re-applies core/decide.py's own precedence exactly: a proven mismatch
+   outranks an unreadable field, which outranks a clean case. A corrected
+   field can only ever move BETWEEN "defect" and "undecided" via "misread"
+   mode (mode "amend" always counts as a defect, on purpose — see
+   fixValueConfirmPanel) — it can never make the case MISMATCH -> OK while
+   another field is still unreadable, and never NEEDS_REVIEW/missing_value
+   -> OK unless every field is actually decided and matching. */
+function applyCorrections(source, row, base) {
+  const corr = getCorrections(source, row.email_id);
+  if (!corr || !Object.keys(corr).length) return base;
+  // Same eligibility as core.equivalence.evaluate_case's is_comparison_case,
+  // PLUS a missing_value escalation (an unreadable field is exactly what
+  // "Fix value" exists to resolve) — never any other NEEDS_REVIEW reason
+  // (missing_attachment/unreadable/wrong_doc_type/unclassified), none of
+  // which has field-level comparisons to correct in the first place.
+  const eligible = base.status === "MISMATCH" || base.status === "OK"
+    || (base.status === "NEEDS_REVIEW" && base.review_reason === "missing_value");
+  if (!eligible) return base;
+  const detail = detailFor(source, row.email_id);
+  const comparisons = detail && detail.comparisons;
+  if (!comparisons || !comparisons.length) return base;
+
+  const defect = [];
+  const undecided = [];
+  for (const c of comparisons) {
+    const fix = corr[c.field];
+    if (fix) {
+      if (fix.mode === "amend") { defect.push(c.field); continue; }
+      // mode "misread": trust POST /api/recheck-field's own answer for the
+      // clerk's corrected wording, exactly like the pipeline trusts
+      // compare() for the original wording.
+      if (fix.status === "mismatch") defect.push(c.field);
+      else if (fix.status === "undecidable") undecided.push(c.field);
+      continue; // "match" -> neither a defect nor undecided
+    }
+    // No active correction for this field: a Mark-as-same pair covering it
+    // (base.rows, from EVAL_CACHE) excludes it entirely, exactly like an
+    // ordinary covered row; otherwise trust the pipeline's own raw reading.
+    if (base.rows && base.rows[c.field]) continue;
+    if (c.undecidable) undecided.push(c.field);
+    else if (!c.matched) defect.push(c.field);
+  }
+  const orderedDefect = COMPARE_FIELD_ORDER.filter((f) => defect.includes(f));
+  const orderedUndecided = COMPARE_FIELD_ORDER.filter((f) => undecided.includes(f));
+  let status, review_reason;
+  if (orderedDefect.length) { status = "MISMATCH"; review_reason = null; }
+  else if (orderedUndecided.length) { status = "NEEDS_REVIEW"; review_reason = "missing_value"; }
+  else { status = "OK"; review_reason = null; }
+  return { ...base, status, review_reason, defect_fields: orderedDefect, changed: true };
+}
+
+/* The effective status/defect count for a board row: the Mark-as-same
+   evaluation cached in EVAL_CACHE when one exists, otherwise the checked
+   result — with any saved "Fix value" corrections layered on top (see
+   applyCorrections above), then a human "problem" review as the final
+   override. Used by tabOf()/counts/tags/exports so the board reflects both
+   live. */
+function effectiveFor(source, row) {
+  const cache = EVAL_CACHE[source];
+  const ev = cache && cache.get(row.email_id);
+  let base = ev
+    ? { status: ev.status || row.status, review_reason: ev.review_reason || row.review_reason,
+        defect_fields: ev.defect_fields || row.defect_fields || [], changed: Boolean(ev.changed),
+        rows: ev.rows || {} }
+    : { status: row.status, review_reason: row.review_reason,
+        defect_fields: row.defect_fields || [], changed: false, rows: {} };
+  base = applyCorrections(source, row, base);
+  if (!isProblemReview(getReview(source, row.email_id))) return base;
+  return { ...base, status: "NEEDS_REVIEW", review_reason: "human_feedback", changed: true, human_feedback: true };
+}
+
 /* "Hi Najiha," -> "Najiha" — reused from the server's own drafted reply
    rather than recomputing core/reply.py's own recipient-name rule client
-   side; falls back to "team", same as the server does when nothing matches. */
+   side; falls back to "team", same as the server does when nothing matches.
+   Matches up to the comma rather than a fixed character class, so a name
+   the server's own fallback pulled from an email local-part — "Hi
+   arlene_yamomo," — survives whole instead of being cut at the underscore. */
 function greetingName(d) {
-  const m = /^\s*(?:Hi|Dear|Hello)\s+([A-Za-z][A-Za-z'-]*)/.exec(d.reply_draft || "");
+  const m = /^Hi ([^,\n]+),/.exec(d.reply_draft || "");
   return m ? m[1] : "team";
 }
 
 /* "Fix a value"'s reply redraft — a client-side generalisation of
-   core/reply.py's MISMATCH_TEMPLATE/CLEAR_TEMPLATE, the exact wording the
-   server would produce for the same effective defect list. No server round
-   trip: corrections must redraft the reply even signed out, where the
-   account-gated POST /api/equivalences/evaluate (which redrafts for marked
-   pairs) is not available. A corrected field's amendment line uses the
-   clerk's typed BL wording, not what was originally read — "the reply's
-   amendment line should ask for that corrected value" (spec). */
+   core/reply.py's MISMATCH_TEMPLATE/CLEAR_TEMPLATE/REVIEW_TEMPLATE, the
+   exact wording the server would produce for the same effective status and
+   defect list. No server round trip: corrections must redraft the reply
+   even signed out, where the account-gated POST /api/equivalences/evaluate
+   (which redrafts for marked pairs) is not available. A "misread"
+   correction's amendment line uses the clerk's corrected wording (what the
+   document actually says); an "amend" correction's line instead asks the
+   carrier for the typed target wording — never restates what was read,
+   since that is precisely what is still wrong. */
 function draftCorrectedReply(d, defectFields, status, corrections) {
   const name = greetingName(d);
   const ref = d.reference || d.email_id || "this case";
+  if (status === "NEEDS_REVIEW") {
+    return `Hi ${name},\n\nWe could not complete the check on ${ref}: a required field was missing or blank in the documents.\nA colleague is reviewing this manually and will revert shortly.\n`;
+  }
   if (status !== "MISMATCH") {
     return `Hi ${name},\n\nNo mismatch detected. Draft BL for ${ref} is OK to proceed.\n`;
   }
@@ -701,94 +820,15 @@ function draftCorrectedReply(d, defectFields, status, corrections) {
     const c = byField[f];
     const label = (c && c.label) || fieldLabel(f);
     const fix = corrections[f];
+    if (fix && fix.mode === "amend") {
+      return `- ${label} — BL must be amended to: ${fix.bl}`;
+    }
     const siVal = (fix && fix.si) || (c && c.si && c.si.value) || "(missing)";
     const blVal = (fix && fix.bl) || (c && c.bl && c.bl.value) || "(missing)";
     return `- ${label} — SI: ${siVal} / BL: ${blVal}`;
   });
   const n = defectFields.length;
   return `Hi ${name},\n\nWe found ${n} discrepanc${n === 1 ? "y" : "ies"} in the draft BL for ${ref}:\n\n${lines.join("\n")}\n\nPlease amend and resend the draft.\n`;
-}
-
-/* Recomputes the effective status for a case after a "Fix value" correction
-   and writes it into EVAL_CACHE — the SAME cache effectiveFor() reads for
-   Mark as same, so the board tabs/counts, the triage banner, "To do", and
-   the exports all move through the ONE re-count path regardless of whether
-   a row's coverage came from a learned pair or a clerk's typed correction.
-   Never a parallel counting rule. Works whether or not the clerk is signed
-   in — unlike evaluateCaseLive()/evaluateBoardBatch(), this never calls the
-   (account-gated) equivalences endpoint; it only reads CORRECTIONS (always
-   available) and whatever pair coverage is already cached for this case. */
-function recomputeCorrectedEffective(source, id, d) {
-  if (!d || d.category !== "BL_COMPARISON" || !(d.comparisons && d.comparisons.length)) return;
-  const found = findRowById(id);
-  const baseRow = found ? found.row : { status: d.status, review_reason: d.review_reason, defect_fields: d.defect_fields };
-  // Same guard as core.equivalence.evaluate_case's is_comparison_case: only
-  // a case the pipeline actually decided by comparing fields (MISMATCH or
-  // OK, no other escalation reason) is eligible. A NEEDS_REVIEW case for an
-  // unrelated reason (missing attachment, wrong doc type, ...) never gets
-  // silently reclassified by a field correction.
-  if (!(baseRow.status === "MISMATCH" || baseRow.status === "OK") || baseRow.review_reason) return;
-
-  const cache = EVAL_CACHE[source] || EVAL_CACHE.mine;
-  const priorEv = cache.get(id);
-  const corr = getCorrections(source, id) || {};
-
-  const defect = [];
-  for (const c of d.comparisons) {
-    const fix = corr[c.field];
-    if (fix) {
-      if (fix.status === "mismatch") defect.push(c.field);
-      continue; // "match" / "undecidable" -> not counted as a defect
-    }
-    // No active correction for this field: fall back to pair coverage
-    // (priorEv.rows — unaffected by a correction being added/undone, since
-    // pairs are a separate, account-wide source of coverage), else the RAW
-    // pipeline reading. Deliberately NEVER priorEv.defect_fields — that is
-    // this same function's OWN last output, and trusting it here would let
-    // a stale "matched because it was corrected a moment ago" snapshot
-    // survive after the clerk undoes exactly that correction.
-    const priorCovered = priorEv && priorEv.rows && priorEv.rows[c.field];
-    if (priorCovered) continue;
-    if (!c.matched && !c.undecidable) defect.push(c.field);
-  }
-  const orderedDefect = COMPARE_FIELD_ORDER.filter((f) => defect.includes(f));
-  const status = orderedDefect.length ? "MISMATCH" : "OK";
-  const merged = {
-    email_id: id,
-    status,
-    review_reason: null,
-    defect_fields: orderedDefect,
-    has_defect: orderedDefect.length > 0,
-    changed: Object.keys(corr).length > 0 || Boolean(priorEv && priorEv.changed),
-    rows: (priorEv && priorEv.rows) || {},
-    recheck: (priorEv && priorEv.recheck) || {},
-    reply_draft: draftCorrectedReply(d, orderedDefect, status, corr),
-  };
-  cache.set(id, merged);
-}
-
-/* Re-applies every saved correction for `source` into EVAL_CACHE — needed
-   because a correction's effect on EVAL_CACHE is otherwise only written at
-   the moment "Check again"/"Undo change" runs (recomputeCorrectedEffective
-   above). A fresh page load has CORRECTIONS restored from localStorage but
-   an empty EVAL_CACHE, so anything that reads effectiveFor() before the
-   corrected case is actually opened — the board's tab counts, the export
-   CSVs — would otherwise show the un-corrected status. Cheap: no network
-   call, just local lookups. */
-function warmAllCorrections(source) {
-  const uploadedPrefix = source === "uploaded" ? `${UPLOADED_REVIEW_PREFIX}${UPLOADED.datasetKey || "-"}:` : null;
-  for (const key of Object.keys(CORRECTIONS)) {
-    let id;
-    if (source === "uploaded") {
-      if (!uploadedPrefix || !key.startsWith(uploadedPrefix)) continue;
-      id = key.slice(uploadedPrefix.length);
-    } else {
-      if (key.startsWith(UPLOADED_REVIEW_PREFIX)) continue;
-      id = key;
-    }
-    const detail = detailFor(source, id);
-    if (detail) recomputeCorrectedEffective(source, id, detail);
-  }
 }
 
 async function load() {
@@ -842,7 +882,6 @@ function matchesQuery(r, q) {
 }
 
 function renderBoard() {
-  warmAllCorrections(SRC);
   const list = $("#case-list");
   list.replaceChildren();
   const q = QUERY.trim().toLowerCase();
@@ -1161,7 +1200,6 @@ const CSV_HEADERS = [
    built from a half-populated cache. A failed request just leaves those
    two columns blank — exports never fail because of it. */
 async function ensureExportEvaluations(source) {
-  warmAllCorrections(source);
   if (!ACCOUNT.user || !PAIRS.length) return;
   await evaluateBoardBatch(source);
 }
@@ -1226,18 +1264,22 @@ function fieldExplanation(c) {
 
 function fieldExplanationWithCorrection(c, fix) {
   if (!fix) return fieldExplanation(c);
-  if (fix.status === "match") return `Corrected by you — now matches. SI: ${fix.si}; BL: ${fix.bl}.`;
-  if (fix.status === "undecidable") return "Corrected by you — still could not be determined.";
-  return `Corrected by you — still differs. SI: ${fix.si}; BL: ${fix.bl}.`;
+  if (fix.mode === "amend") return `You said the BL must be amended to '${fix.bl}'. Still a discrepancy until it is.`;
+  if (fix.status === "match") return `Read wrong, corrected by you — now matches. SI: ${fix.si}; BL: ${fix.bl}.`;
+  if (fix.status === "undecidable") return "Read wrong, corrected by you — still could not be determined.";
+  return `Read wrong, corrected by you — still differs. SI: ${fix.si}; BL: ${fix.bl}.`;
 }
 
-/* "bl consignee: 'X' -> 'Y'" — only the side(s) the clerk actually changed
-   from what was originally read, lowercase field name to match the rest of
-   this column's plain wording (fieldExplanation, noComparisonExplanation). */
+/* "bl consignee: 'X' -> 'Y'" (mode "misread") or "bl consignee must be
+   amended to: 'Y'" (mode "amend") — only the side(s) the clerk actually
+   changed from what was originally read for a misread correction,
+   lowercase field name to match the rest of this column's plain wording
+   (fieldExplanation, noComparisonExplanation). */
 function correctedByClerkText(source, id, field, c) {
   const fix = source && id ? getCorrection(source, id, field) : null;
   if (!fix) return "";
   const label = FIELD_WORDS[field] || field;
+  if (fix.mode === "amend") return `bl ${label} must be amended to: '${fix.bl}'`;
   const origSi = (c && c.si && c.si.value) || "";
   const origBl = (c && c.bl && c.bl.value) || "";
   const parts = [];
@@ -1594,18 +1636,20 @@ function renderReview(id) {
 
   const found = findRowById(id);
   const source = found ? found.source : SRC;
-  // Corrections must be reflected here even signed out (unlike Mark as
-  // same, which needs an account) — warm every saved correction in this
-  // source's EVAL_CACHE before reading it (this case's own status, and
-  // every other case's, for the "Case X of Y" position below), the same
-  // recompute seamTable()'s "Check again"/"Undo change" handlers call live.
-  warmAllCorrections(source);
   const machineEvaluation = EVAL_CACHE[source].get(id) || null;
+  // effectiveFor() layers any saved "Fix value" corrections on top of
+  // machineEvaluation itself (applyCorrections) — corrections are never
+  // written into EVAL_CACHE (that would collide with Mark-as-same's own
+  // evaluation there), so this works whether or not the clerk is signed in.
   const effective = found ? effectiveFor(source, found.row) : null;
-  const evaluation = effective && (machineEvaluation || effective.changed)
+  let evaluation = effective && (machineEvaluation || effective.changed)
     ? { ...(machineEvaluation || {}), status: effective.status, review_reason: effective.review_reason,
         defect_fields: effective.defect_fields, changed: effective.changed }
     : machineEvaluation;
+  const corrections = getCorrections(source, id);
+  if (corrections && Object.keys(corrections).length && evaluation) {
+    evaluation = { ...evaluation, reply_draft: draftCorrectedReply(d, evaluation.defect_fields, evaluation.status, corrections) };
+  }
   const rerender = () => { if (location.hash === `#/case/${id}`) renderReview(id); };
 
   /* Built with el()/textContent, not innerHTML: an uploaded case's subject
@@ -1665,8 +1709,14 @@ function renderReview(id) {
      only when it *changed* the case's status/defect count — a case the
      pipeline already cleared by applying the pair live (uploaded after the
      pair was learned, or re-checked) still needs its covered rows grouped
-     and labelled, even though nothing about its status moved. */
-  if (!evaluation && ACCOUNT.user && PAIRS.length) {
+     and labelled, even though nothing about its status moved.
+
+     Gated on `!machineEvaluation` (Mark-as-same's OWN cache), never on
+     `!evaluation` — a "Fix value" correction alone already makes
+     `evaluation` truthy (applyCorrections sets changed:true), and a
+     correction on one field must never suppress fetching the Mark-as-same
+     evaluation a DIFFERENT field on the same case is still waiting on. */
+  if (!machineEvaluation && ACCOUNT.user && PAIRS.length) {
     evaluateCaseLive(id, source, d).then((ev) => {
       if (ev && (ev.changed || (ev.rows && Object.keys(ev.rows).length))) rerender();
     });
@@ -1914,16 +1964,21 @@ function markedSameLabel(pairId, onUndo) {
 }
 
 /* "Fix a value" — see fixValueConfirmPanel below for the row button that
-   opens this. "Changed by you: BL 'X' → 'Y'" (and/or SI), only for the
-   side(s) the clerk actually typed something different for. */
+   opens this. Two distinct audit lines for the two distinct modes: a
+   "misread" correction only reports the side(s) the clerk actually typed
+   something different for; an "amend" correction always reports the target
+   wording, since the field stays a discrepancy either way. */
 function correctionAuditLine(c, fix) {
+  if (fix.mode === "amend") {
+    return `BL must be amended to '${fix.bl}'`;
+  }
   const origSi = (c.si && c.si.value) || "";
   const origBl = (c.bl && c.bl.value) || "";
   const parts = [];
   if (fix.si !== origSi) parts.push(`SI '${origSi}' → '${fix.si}'`);
   if (fix.bl !== origBl) parts.push(`BL '${origBl}' → '${fix.bl}'`);
-  if (!parts.length) return "Checked again by you — no change to the values.";
-  return `Changed by you: ${parts.join("; ")}`;
+  if (!parts.length) return "Read wrong — checked again by you, no change to the values.";
+  return `Read wrong — corrected by you: ${parts.join("; ")}`;
 }
 
 const FIX_VALUE_MAX = 500;
@@ -1931,40 +1986,104 @@ const FIX_VALUE_MAX = 500;
 /* "Fix value"'s inline panel — same interaction shape as
    markSameConfirmPanel above (inline, never window.confirm/alert/prompt),
    but never gated on sign-in: a clerk's typed correction always works,
-   signed in or not (see CORRECTIONS above). "Check again" calls the
-   stateless POST /api/recheck-field (api/_recheck.py -> core.compare.
-   compare_values) — the exact same deterministic rule the pipeline used
-   the first time, no AI. */
+   signed in or not (see CORRECTIONS above).
+
+   Two modes, chosen explicitly (never inferred from what gets typed) —
+   the core rule this whole feature answers to is that a correction must
+   never make ClearDraft tell a carrier "OK to proceed" while the BL is
+   actually still wrong:
+     "ClearDraft read it wrong" — the clerk corrects what the SI and/or BL
+       actually say, then "Check again" calls the stateless
+       POST /api/recheck-field (api/_recheck.py -> core.compare.
+       compare_values) — the exact same deterministic rule the pipeline
+       used the first time, no AI. May become a match.
+     "The BL is wrong — it should say…" — one input for the target
+       wording. Always saved as a discrepancy (see the "amend" branch
+       below) — no recheck call, because no wording the clerk types here
+       can make the document on file correct; only the carrier's actual
+       amendment can. */
 function fixValueConfirmPanel(c, d, source, fixBtn, onSaved) {
   const panel = el("div", "fix-value-panel");
   panel.hidden = true;
 
-  panel.append(el("div", "fix-value-hint",
-    "Change a value if ClearDraft read it wrong, or type what the BL should say."));
-
+  let mode = "misread";
   const idBase = `fix-${(d && d.email_id) || "adhoc"}-${c.field}`.replace(/[^a-zA-Z0-9-]+/g, "-");
 
-  const siLabel = el("label", "field-label", "Shipping Instruction (SI) says");
-  siLabel.setAttribute("for", `${idBase}-si`);
-  panel.append(siLabel);
-  const siInput = document.createElement("textarea");
-  siInput.id = `${idBase}-si`;
-  siInput.className = "field-input fix-value-input";
-  siInput.rows = 2;
-  siInput.maxLength = FIX_VALUE_MAX;
-  siInput.value = (c.si && c.si.value) || "";
-  panel.append(siInput);
+  const modeRow = el("div", "fix-value-mode-row");
+  modeRow.setAttribute("role", "group");
+  modeRow.setAttribute("aria-label", "What kind of fix is this?");
+  const misreadBtn = el("button", "fix-value-mode-btn", "ClearDraft read it wrong");
+  misreadBtn.type = "button";
+  misreadBtn.setAttribute("aria-pressed", "true");
+  const amendBtn = el("button", "fix-value-mode-btn", "The BL is wrong — it should say…");
+  amendBtn.type = "button";
+  amendBtn.setAttribute("aria-pressed", "false");
+  modeRow.append(misreadBtn, amendBtn);
+  panel.append(modeRow);
 
-  const blLabel = el("label", "field-label", "Draft Bill of Lading (BL) says");
-  blLabel.setAttribute("for", `${idBase}-bl`);
-  panel.append(blLabel);
-  const blInput = document.createElement("textarea");
-  blInput.id = `${idBase}-bl`;
-  blInput.className = "field-input fix-value-input";
-  blInput.rows = 2;
-  blInput.maxLength = FIX_VALUE_MAX;
-  blInput.value = (c.bl && c.bl.value) || "";
-  panel.append(blInput);
+  const fieldsHost = el("div", "fix-value-fields");
+  panel.append(fieldsHost);
+
+  let siInput = null;
+  let blInput = null;
+
+  function renderFields() {
+    fieldsHost.replaceChildren();
+    if (mode === "misread") {
+      fieldsHost.append(el("div", "fix-value-hint", "Change a value if ClearDraft read the document wrong."));
+
+      const siLabel = el("label", "field-label", "Shipping Instruction (SI) says");
+      siLabel.setAttribute("for", `${idBase}-si`);
+      fieldsHost.append(siLabel);
+      siInput = document.createElement("textarea");
+      siInput.id = `${idBase}-si`;
+      siInput.className = "field-input fix-value-input";
+      siInput.rows = 2;
+      siInput.maxLength = FIX_VALUE_MAX;
+      siInput.value = (c.si && c.si.value) || "";
+      fieldsHost.append(siInput);
+
+      const blLabel = el("label", "field-label", "Draft Bill of Lading (BL) says");
+      blLabel.setAttribute("for", `${idBase}-bl`);
+      fieldsHost.append(blLabel);
+      blInput = document.createElement("textarea");
+      blInput.id = `${idBase}-bl`;
+      blInput.className = "field-input fix-value-input";
+      blInput.rows = 2;
+      blInput.maxLength = FIX_VALUE_MAX;
+      blInput.value = (c.bl && c.bl.value) || "";
+      fieldsHost.append(blInput);
+    } else {
+      fieldsHost.append(el("div", "fix-value-hint",
+        "This asks the carrier to change the BL to exactly this wording. The field stays a discrepancy until they do."));
+
+      const label = el("label", "field-label", "The BL should say");
+      label.setAttribute("for", `${idBase}-amend`);
+      fieldsHost.append(label);
+      blInput = document.createElement("textarea");
+      blInput.id = `${idBase}-amend`;
+      blInput.className = "field-input fix-value-input";
+      blInput.rows = 2;
+      blInput.maxLength = FIX_VALUE_MAX;
+      blInput.value = (c.bl && c.bl.value) || "";
+      fieldsHost.append(blInput);
+      siInput = null;
+    }
+  }
+  renderFields();
+
+  function selectMode(next) {
+    if (mode === next) return;
+    mode = next;
+    misreadBtn.setAttribute("aria-pressed", String(mode === "misread"));
+    amendBtn.setAttribute("aria-pressed", String(mode === "amend"));
+    err.hidden = true;
+    renderFields();
+    const first = fieldsHost.querySelector("textarea");
+    if (first) first.focus();
+  }
+  misreadBtn.addEventListener("click", () => selectMode("misread"));
+  amendBtn.addEventListener("click", () => selectMode("amend"));
 
   const err = el("div", "account-error fix-value-error");
   err.hidden = true;
@@ -1989,8 +2108,27 @@ function fixValueConfirmPanel(c, d, source, fixBtn, onSaved) {
   });
 
   checkBtn.addEventListener("click", async () => {
-    checkBtn.disabled = true;
     err.hidden = true;
+
+    if (mode === "amend") {
+      const target = (blInput.value || "").trim();
+      if (!target) {
+        err.hidden = false;
+        err.textContent = "Type what the BL should say.";
+        return;
+      }
+      // No recheck call and no compare_values status to trust here: what
+      // the BL SHOULD say is the clerk's own judgement, not something
+      // core.compare can verify, and the field must stay a discrepancy
+      // regardless — the document on file is still wrong until the
+      // carrier actually amends it.
+      setCorrection(source, d.email_id, c.field, "amend", (c.si && c.si.value) || "", blInput.value, "mismatch", "");
+      close();
+      if (onSaved) onSaved();
+      return;
+    }
+
+    checkBtn.disabled = true;
     try {
       const r = await fetch("/api/recheck-field", {
         method: "POST",
@@ -2005,7 +2143,7 @@ function fixValueConfirmPanel(c, d, source, fixBtn, onSaved) {
         err.textContent = (j && j.detail) || "Could not check this value.";
         return;
       }
-      setCorrection(source, d.email_id, c.field, siInput.value, blInput.value, j.status, j.note);
+      setCorrection(source, d.email_id, c.field, "misread", siInput.value, blInput.value, j.status, j.note);
       close();
       if (onSaved) onSaved();
     } catch {
@@ -2115,7 +2253,6 @@ function seamTable(d, ctx = {}) {
       undoBtn.type = "button";
       undoBtn.addEventListener("click", () => {
         clearCorrection(source, d.email_id, c.field);
-        recomputeCorrectedEffective(source, d.email_id, d);
         toast("Change undone. This field is checked as originally read.");
         if (ctx.rerender) ctx.rerender();
       });
@@ -2161,7 +2298,6 @@ function seamTable(d, ctx = {}) {
       fixBtn.type = "button";
       fixBtn.setAttribute("aria-expanded", "false");
       const fixPanel = fixValueConfirmPanel(c, d, source, fixBtn, () => {
-        recomputeCorrectedEffective(source, d.email_id, d);
         if (ctx.rerender) ctx.rerender();
       });
       fixBtn.addEventListener("click", () => {
@@ -4198,6 +4334,7 @@ async function loadAccountMail() {
 
 async function afterSignedIn() {
   REVIEWS = loadReviews();
+  CORRECTIONS = loadCorrections();
   await importLocalMailIfAny();
   await loadAccountMail();
   await Promise.all([loadPairs(), loadFeedback()]);
@@ -4210,6 +4347,7 @@ async function signOut() {
   ACCOUNT.user = null;
   MINE = loadMine();
   REVIEWS = loadReviews();
+  CORRECTIONS = loadCorrections();
   PAIRS = [];
   invalidateEvalCache();
   renderLearnedShortcut();
