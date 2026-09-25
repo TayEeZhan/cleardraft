@@ -23,18 +23,26 @@ def test_parses_mt() -> None:
     assert w.unit == "MT"
 
 
-def test_ton_variants_are_rejected_as_ambiguous() -> None:
+def test_parses_official_lowercase_tonne_symbol() -> None:
+    w = parse_weight("18.20 t")
+    assert w is not None
+    assert w.kg == 18200
+    assert w.unit == "t"
+
+
+def test_capitalised_tonne_symbol_is_supported_but_ton_words_are_ambiguous() -> None:
     """"TON" is ambiguous: a US short ton is 907.18 kg, a UK long ton is
     1016.05 kg, and a metric tonne is 1000 kg - and in freight, a "revenue/
     measurement ton" is a different concept again (1 m^3 or 1000 kg,
     whichever is greater). Nothing printed on a shipping document
-    distinguishes which one "TON" means, so TON/TONS/T all fail to parse and
-    the row escalates rather than guessing. MT/MTS/TONNE/TONNES are
-    unambiguous and keep converting at x1000.
+    distinguishes which one "TON" means, so TON/TONS fail to parse and the row
+    escalates rather than guessing. The one-letter tonne symbol is unambiguous;
+    both t and its commonly capitalised document rendering T convert at x1000.
     """
     assert parse_weight("22.5 TON") is None
     assert parse_weight("22.5 TONS") is None
-    assert parse_weight("22.5 T") is None
+    assert parse_weight("22.5 T").kg == 22500
+    assert parse_weight("22.5 T").unit == "T"
 
 
 def test_parses_lbs() -> None:
@@ -65,6 +73,7 @@ def test_garbage_input_returns_none() -> None:
 
 def test_describe_unit_difference_reports_the_two_units() -> None:
     assert describe_unit_difference("22 MT", "22,000 KG") == "MT vs KG"
+    assert describe_unit_difference("18.20 t", "18,200 KG") == "t vs KG"
 
 
 def test_describe_unit_difference_ignores_bare_vs_kg_spelling() -> None:
