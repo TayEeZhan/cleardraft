@@ -3572,7 +3572,14 @@ const FOOL_DEFAULTS = {
 const FOOL_TRICKS = [
   { label: "22 MT vs 22 KG", field: "gross_weight_kg", si: "22 MT", bl: "22 KG" },
   { label: "22,000 KG vs 22 MT", field: "gross_weight_kg", si: "22,000 KG", bl: "22 MT" },
-  { label: "Mixed sizes: 2 x 40HC + 1 x 20GP", field: "container_count", si: "2 x 40HC + 1 x 20GP", bl: "2 x 40HC + 1 x 20GP" },
+  // Three boxes against three boxes, loaded differently. A checker that
+  // compares only the total says "3 = 3, fine"; core/containers.py compares
+  // the composition, so this is a mismatch. (The previous trick here put the
+  // SAME mixed string on both sides to show it escalating - that escalation
+  // was a false one and was removed, so the trick no longer showed anything.)
+  { label: "2x40HC+1x20GP vs 1x40HC+2x20GP", field: "container_count", si: "2 x 40HC + 1 x 20GP", bl: "1 x 40HC + 2 x 20GP" },
+  // Same count, different equipment - roughly half the cargo volume.
+  { label: "6 x 40HC vs 6 x 20GP", field: "container_count", si: "6 x 40'HC", bl: "6 x 20GP" },
   { label: "CO., LTD vs COMPANY LIMITED", field: "shipper", si: "Ocean Paper Co Ltd", bl: "OCEAN PAPER COMPANY LIMITED" },
   { label: "& vs AND", field: "shipper", si: "Smith & Sons Trading", bl: "SMITH AND SONS TRADING" },
   { label: "Port Klang vs Port Kelang", field: "port_of_loading", si: "PORT KLANG", bl: "PORT KELANG" },
