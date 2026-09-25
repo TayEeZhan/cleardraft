@@ -3649,7 +3649,7 @@ function foolRowReason(field, si, bl, result) {
     return result.note ? `Same value once normalised. ${result.note} — unit converted, not a defect.` : "Same value once normalised.";
   }
   if (result.status === "undecidable") {
-    if (field === "container_count") return "Mixed container sizes — a person checks the total.";
+    if (field === "container_count") return "Equipment couldn't be confirmed on both sides, or the quantity is written ambiguously — a person checks it.";
     return "Could not be read with certainty (blank, or an ambiguous format) — sent to a person rather than guessed at.";
   }
   const siNorm = result.si_normalised == null ? "(blank)" : String(result.si_normalised);

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from core.containers import container_verdict
 from core.equivalence import EQUIVALENCE_FIELDS
 from core.normalise import normalise
 from core.types import COMPARE_FIELDS, CompareField, ExtractedDoc, FieldComparison, FieldValue
@@ -106,6 +107,31 @@ def compare(
             )
         )
 
+        # container_count is a COMPOSITION (how many of each size), not a
+        # bare integer - see core/containers.py. Its total alone can silently
+        # match two shipments loaded completely differently ("6 x 40'HC" vs
+        # "6 x 20GP") or silently OK a size that was never actually stated
+        # anywhere ("6 x 40'HC" vs bare "6" with no size on the BL at all).
+        # This gate only ever DEMOTES a row the totals-only check above
+        # already called a match/mismatch - never upgrades one - so it is
+        # safe to run only when the row isn't already undecidable. Wrapped so
+        # a bug here can never crash a comparison the scorer depends on: any
+        # exception leaves matched/undecidable exactly as computed above.
+        if field == "container_count" and not undecidable:
+            try:
+                verdict = container_verdict(
+                    si_fv.value if si_fv else "",
+                    bl_fv.value if bl_fv else "",
+                    si.text if si else "",
+                    bl.text if bl else "",
+                )
+                if verdict == "differ":
+                    matched = False
+                elif verdict == "unverifiable":
+                    matched, undecidable = False, True
+            except Exception:
+                pass
+
         rows.append(
             FieldComparison(
                 field=field,
@@ -159,6 +185,34 @@ def compare_values(field: str, si: str, bl: str) -> dict:
         status = "match"
     else:
         status = "mismatch"
+
+    if field == "container_count" and status != "undecidable":
+        # The SAME composition gate compare() applies, so a clerk's typed
+        # correction cannot clear something the pipeline would refuse.
+        # Without it, normalise_container_count's summing would report
+        # "2 x 40HC + 1 x 20GP" and "1 x 40HC + 2 x 20GP" as a match - the
+        # exact false match commit 15c49b1 removed summing to prevent.
+        #
+        # Only "differ" is applied here, and deliberately so. "differ" is
+        # decided from the two values alone (different totals, or the same
+        # total split across different equipment), so it holds on any path.
+        # "unverifiable" is a statement about the DOCUMENT - "no size is
+        # printed anywhere on the other side" - and there is no document on
+        # this path, only two strings a clerk typed after reading it. Raising
+        # "a person should check" at the exact moment a person is checking
+        # would be circular, so that branch stays in compare() where the
+        # document text actually exists.
+        #
+        # Nothing is lost by omitting it: container_verdict returns
+        # "unverifiable" for an unparseable value too, but such a value has
+        # already normalised to None and left status "undecidable" above, so
+        # this block never runs for it.
+        try:
+            verdict = container_verdict(si, bl, "", "")
+        except Exception:
+            verdict = "agree"
+        if verdict == "differ":
+            status = "mismatch"
 
     note = None
     if field == "gross_weight_kg":

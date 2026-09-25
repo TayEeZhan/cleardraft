@@ -76,9 +76,46 @@ def test_container_count_fails_closed_on_size_before_multiplier():
     assert result["si_normalised"] is None
 
 
-def test_container_count_fails_closed_on_mixed_equipment():
+def test_container_count_matches_on_identical_mixed_equipment():
+    """core/containers.py: container_count is a composition, not a bare
+    total. compare_values has no document text to run the full
+    container_verdict gate (core/compare.py:compare() does - see
+    tests/test_compare_container_gate.py) so it can only compare the two
+    typed values directly, but that is still safe here: two BYTE-IDENTICAL
+    strings always describe the identical split, so there is nothing
+    ambiguous to escalate. This used to be "undecidable" back when mixed
+    equipment was refused outright rather than summed - see
+    core/containers.py's Composition docstring."""
     result = compare_values("container_count", "2 x 40HC + 1 x 20GP", "2 x 40HC + 1 x 20GP")
-    assert result["status"] == "undecidable"
+    assert result["status"] == "match"
+    assert result["si_normalised"] == result["bl_normalised"] == 3
+
+
+def test_container_count_mismatches_on_same_total_different_split():
+    """Three boxes either way, loaded completely differently - and a clerk's
+    typed correction must NOT clear it.
+
+    Both totals normalise to 3, so equality alone would call this a match.
+    That is precisely the false match commit 15c49b1 removed summing to
+    prevent, and it is why compare_values applies the same composition gate
+    compare() does. The "differ" verdict is decided from the two values
+    alone, so it holds here even though this path has no document text."""
+    result = compare_values("container_count", "2 x 40HC + 1 x 20GP", "1 x 40HC + 2 x 20GP")
+    assert result["status"] == "mismatch"
+    assert result["si_normalised"] == result["bl_normalised"] == 3
+
+
+def test_container_count_recheck_does_not_demand_a_size_the_clerk_cannot_supply():
+    """The other half of the gate, deliberately NOT applied here.
+
+    In the pipeline, an SI stating "6 x 40'HC" against a BL whose text never
+    mentions a size anywhere escalates - the equipment was never confirmed.
+    On this path there is no document, only two strings a clerk typed after
+    reading one, so raising "a person should check" at the moment a person
+    is checking would be circular. Equal totals with nothing contradicting
+    them stay a match."""
+    result = compare_values("container_count", "6 x 40'HC", "6 CONTAINERS")
+    assert result["status"] == "match"
 
 
 def test_weight_field_match():
