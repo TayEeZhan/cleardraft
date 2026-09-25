@@ -1671,8 +1671,9 @@ function seamTable(d, ctx = {}) {
 
     if (c.unit_note) {
       const kgText = c.unit_kg == null ? "" : ` · ${Number(c.unit_kg).toLocaleString("en-US")} kg`;
-      const unitChip = el("span", "chip chip-quiet", "units differ — same weight");
+      const unitChip = el("span", "chip chip-quiet", "units converted");
       unitChip.title = `${c.unit_note}${kgText}`;
+      unitChip.setAttribute("aria-label", `Units converted: ${c.unit_note}${kgText}`);
       actions.append(unitChip);
     }
 
