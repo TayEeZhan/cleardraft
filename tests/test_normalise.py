@@ -36,13 +36,21 @@ def test_container_count_plain_values() -> None:
 #: so anything genuinely ambiguous about the quantity returns None rather
 #: than a guess, and only a single unambiguous "N x <size>" group - or a
 #: plain value with no "x" at all - returns an int.
+#:
+#: Mixed equipment (more than one "N x <size>" group) is now SUMMED - see
+#: core/containers.py's Composition/total_for. Summing a mixed shipment on
+#: its own would let "2 x 40HC + 1 x 20GP" (3 boxes, one split) silently
+#: match "1 x 40HC + 2 x 20GP" (also 3 boxes, split the other way); that is
+#: guarded against one layer up, by core/compare.py's container_count gate
+#: (core.containers.container_verdict), which this module-level function no
+#: longer has a say in - see tests/test_containers.py and
+#: tests/test_compare_container_gate.py for that guard.
 _CONTAINER_COUNT_CASES = [
-    # Mixed equipment: more than one "N x <size>" group. NOT summed - see
-    # normalise_container_count's docstring for why summing would be wrong.
-    ("2 x 40HC + 1 x 20GP", None),
-    ("2 x 40HC + 3 x 20GP", None),
-    ("1 X 20GP, 2 X 40HC", None),
-    ("5 CONTAINERS: 4 X 40HC + 1 X 20GP", None),
+    # Mixed equipment: more than one "N x <size>" group - now summed.
+    ("2 x 40HC + 1 x 20GP", 3),
+    ("2 x 40HC + 3 x 20GP", 5),
+    ("1 X 20GP, 2 X 40HC", 3),
+    ("5 CONTAINERS: 4 X 40HC + 1 X 20GP", 5),
     # Plain values: no "x" pattern, old leading-integer rule applies.
     ("6 x 40'HC", 6),
     ("6", 6),
