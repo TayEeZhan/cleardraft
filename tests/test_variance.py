@@ -1,7 +1,10 @@
+import re
+from pathlib import Path
+
 import pytest
 
 from core.types import FieldComparison, FieldValue
-from core.variance import comparison_variance, explain_difference, variance_label
+from core.variance import VARIANCE_LABELS, comparison_variance, explain_difference, variance_label
 
 
 @pytest.mark.parametrize(
@@ -85,3 +88,25 @@ def test_variance_label_known_reasons_and_fallback():
     assert variance_label("suffix_abbreviation") == "Possible company-suffix abbreviation"
     assert variance_label(None) == "Possible formatting variation"
     assert variance_label("not_a_real_reason") == "Possible formatting variation"
+
+
+# ---------------------------------------------------------------------------
+# web/app.js's own VARIANCE_LABELS is a hand-duplicated copy of this module's
+# (there is no shared module between the two runtimes - see core/variance.py's
+# comment above VARIANCE_LABELS). This test parses the JS object literal
+# straight off disk and diffs it against the Python dict, so the two copies
+# cannot silently drift apart the next time either one is edited alone.
+# ---------------------------------------------------------------------------
+def _js_variance_labels() -> dict[str, str]:
+    app_js = Path(__file__).resolve().parent.parent / "web" / "app.js"
+    text = app_js.read_text(encoding="utf-8")
+    match = re.search(r"const VARIANCE_LABELS = \{(.*?)\};", text, re.S)
+    assert match, "web/app.js: could not find `const VARIANCE_LABELS = { ... };`"
+    body = match.group(1)
+    pairs = re.findall(r'(\w+):\s*"((?:[^"\\]|\\.)*)"', body)
+    assert pairs, "web/app.js: VARIANCE_LABELS block matched but no key/value pairs parsed"
+    return {key: value.replace('\\"', '"').replace("\\\\", "\\") for key, value in pairs}
+
+
+def test_js_and_python_variance_labels_match():
+    assert _js_variance_labels() == VARIANCE_LABELS

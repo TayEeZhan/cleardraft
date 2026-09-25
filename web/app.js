@@ -1568,6 +1568,24 @@ function whyStep1(d) {
   return `${text}.`;
 }
 
+/* Whether this case is a BL_COMPARISON email whose intent ISN'T "compare"
+   (core/decide.py rung 2's other branch — "please send the draft BL", no
+   attachments needed, 91 of the 520 emails are exactly this). Checked
+   before the plain category test in both whyStep2 and whyStep5 below, so
+   this specific, common case never gets the generic "wasn't an SI/BL
+   comparison" wording, which would wrongly suggest the email wasn't even
+   about an SI/BL pair. */
+function isSendDocCase(d) {
+  return d.category === "BL_COMPARISON" && Boolean(d.intent) && d.intent !== "compare";
+}
+
+//: Expected kind per document slot (core/decide.py rung 4: si.kind != "SI"
+//: or bl.kind != "BL" -> wrong_doc_type), for the "looks like: X" note below.
+const DOC_SLOT_EXPECT = {
+  si: { kind: "SI", label: "a Shipping Instruction" },
+  bl: { kind: "BL", label: "a Bill of Lading" },
+};
+
 function whyStep2(d) {
   const docs = d.documents;
   const si = docs && docs.si;
@@ -1576,17 +1594,25 @@ function whyStep2(d) {
     if (d.review_reason === "missing_attachment") {
       return "Documents found: none — fewer than two files were attached.";
     }
+    if (isSendDocCase(d)) {
+      return "Documents found: none — not asked for; this email asks to send a document, not compare one.";
+    }
     return "Documents found: none — this wasn't an SI/BL comparison.";
   }
   const parts = [];
-  for (const [doc, label] of [[si, "SI"], [bl, "BL"]]) {
+  for (const [side, doc, label] of [["si", si, "SI"], ["bl", bl, "BL"]]) {
     if (!doc) { parts.push(`${label} not attached`); continue; }
     const name = String(doc.path || "").split("/").pop() || label;
     if (doc.readable === false) {
       parts.push(`${label} ${name} could not be read${doc.error ? ` (${doc.error})` : ""}`);
       continue;
     }
-    parts.push(`${label} ${name}, reader: ${readerLabel(doc.path)}`);
+    let entry = `${label} ${name}, reader: ${readerLabel(doc.path)}`;
+    const expect = DOC_SLOT_EXPECT[side];
+    if (expect && doc.kind && doc.kind !== expect.kind) {
+      entry += ` — ${label} slot: not ${expect.label} (looks like: ${String(doc.kind).toLowerCase()})`;
+    }
+    parts.push(entry);
   }
   return `Documents found: ${parts.join("; ")}.`;
 }
@@ -1605,7 +1631,21 @@ function whyStep3(d) {
   return `${text}.`;
 }
 
-function whyStep4(d) {
+//: These three review reasons are document-level failures — the "seven-field
+//: comparison" behind them (if data.json even has one; wrong_doc_type keeps
+//: comparing the wrong file against the SI) is not a real read of a BL, so
+//: showing its counts would say e.g. "1 match, 6 couldn't read" about a
+//: commercial invoice. Skip it and name the actual reason instead.
+const WHY_SKIP_REASON_TEXT = {
+  wrong_doc_type: "one of the attachments isn't an SI or a BL",
+  unreadable: "a document could not be read",
+  missing_attachment: "fewer than two documents were attached",
+};
+
+function whyStep4(d, evaluation) {
+  if (d.status === "NEEDS_REVIEW" && WHY_SKIP_REASON_TEXT[d.review_reason]) {
+    return `Compared: skipped — ${WHY_SKIP_REASON_TEXT[d.review_reason]}.`;
+  }
   const comparisons = d.comparisons || [];
   if (!comparisons.length) return "Compared: not applicable — nothing to compare.";
   let match = 0, differ = 0, unknown = 0;
@@ -1614,7 +1654,17 @@ function whyStep4(d) {
     else if (c.matched) match++;
     else differ++;
   }
-  return `Compared ${comparisons.length} fields: ${match} match, ${differ} differ, ${unknown} couldn't read (after units/normalising).`;
+  let text = `Compared ${comparisons.length} fields: ${match} match, ${differ} differ, ${unknown} couldn't read (after units/normalising).`;
+  // Raw checked counts above stay put (they are the audit trail); a
+  // Mark-as-same pair or a Fix-value correction only adds a second,
+  // clearly-labelled live count — it never rewrites the first one. Step 5
+  // says the same thing in words ("...after your changes"), so the two
+  // never disagree about whether anything actually changed.
+  if (evaluation && evaluation.changed) {
+    const stillDiffer = (evaluation.defect_fields || []).length;
+    text += ` After your changes: ${stillDiffer} still differ.`;
+  }
+  return text;
 }
 
 /* core/decide.py's own ladder (see its module docstring), in plain words,
@@ -1633,14 +1683,26 @@ const WHY_REASON_TEXT = {
 function whyStep5(d, evaluation) {
   const status = evaluation ? evaluation.status : d.status;
   const reason = evaluation ? evaluation.review_reason : d.review_reason;
-  if (status === "MISMATCH") return "Decision rule used: any field differs → Discrepancy.";
+  // Step 4 already spells out the raw vs. live counts; this just names,
+  // in words, that the rule below was applied to the changed picture, so
+  // the two steps can never quietly disagree about whether anything moved.
+  const suffix = evaluation && evaluation.changed ? " after your changes" : "";
+  if (status === "MISMATCH") return `Decision rule used: any field differs → Discrepancy${suffix}.`;
   if (status === "NEEDS_REVIEW") {
-    return `Decision rule used: ${WHY_REASON_TEXT[reason] || "ClearDraft could not decide → Needs a human."}`;
+    const base = (WHY_REASON_TEXT[reason] || "ClearDraft could not decide → Needs a human.").replace(/\.$/, "");
+    return `Decision rule used: ${base}${suffix}.`;
+  }
+  // core/decide.py rung 2's OTHER branch: a BL_COMPARISON email whose
+  // intent isn't "compare" is OK with nothing to compare — checked BEFORE
+  // the plain category test below, so this common case (91 of 520 emails)
+  // never gets the generic "not an SI/BL check" wording.
+  if (isSendDocCase(d)) {
+    return `Decision rule used: sorted as an SI/BL email, but it asks to send a document, not to compare — nothing to compare yet${suffix}.`;
   }
   if (d.category !== "BL_COMPARISON" || !(d.comparisons || []).length) {
-    return "Decision rule used: not an SI/BL check → no documents to check.";
+    return `Decision rule used: not an SI/BL check → no documents to check${suffix}.`;
   }
-  return "Decision rule used: every field matched → All clear.";
+  return `Decision rule used: every field matched → All clear${suffix}.`;
 }
 
 function whyStep6(d, source) {
@@ -1680,7 +1742,7 @@ function whyPanel(d, evaluation, source) {
     whyStep1(d),
     whyStep2(d),
     whyStep3(d),
-    whyStep4(d),
+    whyStep4(d, evaluation),
     whyStep5(d, evaluation),
     whyStep6(d, source),
   ];
@@ -3509,7 +3571,7 @@ const FOOL_DEFAULTS = {
 const FOOL_TRICKS = [
   { label: "22 MT vs 22 KG", field: "gross_weight_kg", si: "22 MT", bl: "22 KG" },
   { label: "22,000 KG vs 22 MT", field: "gross_weight_kg", si: "22,000 KG", bl: "22 MT" },
-  { label: "2 x 40HC + 1 x 20GP", field: "container_count", si: "2 x 40HC + 1 x 20GP", bl: "2 x 40HC + 1 x 20GP" },
+  { label: "Mixed sizes: 2 x 40HC + 1 x 20GP", field: "container_count", si: "2 x 40HC + 1 x 20GP", bl: "2 x 40HC + 1 x 20GP" },
   { label: "CO., LTD vs COMPANY LIMITED", field: "shipper", si: "Ocean Paper Co Ltd", bl: "OCEAN PAPER COMPANY LIMITED" },
   { label: "& vs AND", field: "shipper", si: "Smith & Sons Trading", bl: "SMITH AND SONS TRADING" },
   { label: "Port Klang vs Port Kelang", field: "port_of_loading", si: "PORT KLANG", bl: "PORT KELANG" },
@@ -3525,7 +3587,22 @@ let FOOL_STATE = {};
 let FOOL_INITED = false;
 const FOOL_INPUTS = {}; // field -> {siInput, blInput, row, chip, reason}
 const FOOL_DEBOUNCE_MS = 350;
-let foolDebounceTimer = null;
+// ONE debounce timer PER FIELD — a single shared timer would cancel row A's
+// pending check the moment row B is edited within the same window, leaving
+// row A stuck on "Checking…" forever.
+const FOOL_DEBOUNCE_TIMERS = {}; // field -> timer id
+// A monotonic per-field sequence number. Every edit or trick click bumps it
+// before the request even starts; a response is applied only if the field's
+// counter still matches the value captured when THIS request began — so an
+// out-of-order network reply (two trick clicks fired in quick succession,
+// or an edit that raced a still-in-flight earlier check) can never overwrite
+// a row with a stale result.
+const FOOL_SEQ = {}; // field -> counter
+
+function nextFoolSeq(field) {
+  FOOL_SEQ[field] = (FOOL_SEQ[field] || 0) + 1;
+  return FOOL_SEQ[field];
+}
 
 function foolResetState() {
   FOOL_STATE = {};
@@ -3534,20 +3611,22 @@ function foolResetState() {
   }
 }
 
-/* Overall verdict line, using the SAME precedence core/decide.py uses -
-   escalation beats everything, a proven discrepancy beats a clean row:
-   any row ClearDraft could not decide -> "Needs a human"; else any row
-   that differs -> "N discrepancies found"; else "All match". */
+/* Overall verdict line, using the SAME precedence core/decide.py actually
+   uses (see its module docstring, rungs 5/6): a PROVEN discrepancy outranks
+   an unreadable field, because a defect already known to be real is more
+   use to a clerk than "we could not check one field". So: any row that
+   differs -> "N discrepancies found"; else any row ClearDraft could not
+   decide -> "Needs a human"; else "All match". */
 function foolVerdictText() {
   const results = FOOL_FIELDS.map(({ field }) => FOOL_STATE[field].result).filter(Boolean);
   if (results.length < FOOL_FIELDS.length) return { kind: "pending", text: "Checking…" };
   const undecidable = results.filter((r) => r.status === "undecidable").length;
   const mismatch = results.filter((r) => r.status === "mismatch").length;
-  if (undecidable > 0) {
-    return { kind: "review", text: "Needs a human — ClearDraft could not decide every field." };
-  }
   if (mismatch > 0) {
     return { kind: "mismatch", text: `${mismatch} discrepanc${mismatch === 1 ? "y" : "ies"} found` };
+  }
+  if (undecidable > 0) {
+    return { kind: "review", text: "Needs a human — ClearDraft could not decide every field." };
   }
   return { kind: "match", text: "All match" };
 }
@@ -3570,6 +3649,7 @@ function foolRowReason(field, si, bl, result) {
     return result.note ? `Same value once normalised. ${result.note} — unit converted, not a defect.` : "Same value once normalised.";
   }
   if (result.status === "undecidable") {
+    if (field === "container_count") return "Mixed container sizes — a person checks the total.";
     return "Could not be read with certainty (blank, or an ambiguous format) — sent to a person rather than guessed at.";
   }
   const siNorm = result.si_normalised == null ? "(blank)" : String(result.si_normalised);
@@ -3612,6 +3692,11 @@ function renderFoolRow(field) {
    ClearDraft itself could not be reached either. */
 async function foolCheckField(field) {
   const state = FOOL_STATE[field];
+  // Captured BEFORE the request starts: this call "owns" seq, and only
+  // applies its own result if nothing newer (another edit, another trick)
+  // has bumped the counter again by the time it comes back.
+  const mySeq = nextFoolSeq(field);
+  let result;
   try {
     const r = await fetch("/api/recheck-field", {
       method: "POST",
@@ -3619,14 +3704,14 @@ async function foolCheckField(field) {
       credentials: "same-origin",
       body: JSON.stringify({ field, si_value: state.si, bl_value: state.bl }),
     });
-    if (!r.ok) {
-      state.result = { status: "undecidable", si_normalised: null, bl_normalised: null, note: null, hint: null };
-    } else {
-      state.result = await r.json();
-    }
+    result = r.ok
+      ? await r.json()
+      : { status: "undecidable", si_normalised: null, bl_normalised: null, note: null, hint: null };
   } catch {
-    state.result = { status: "undecidable", si_normalised: null, bl_normalised: null, note: null, hint: null };
+    result = { status: "undecidable", si_normalised: null, bl_normalised: null, note: null, hint: null };
   }
+  if (FOOL_SEQ[field] !== mySeq) return; // superseded — a newer check owns this row now
+  state.result = result;
   renderFoolRow(field);
   renderFoolVerdict();
 }
@@ -3655,6 +3740,7 @@ function buildFoolRow(fieldDef) {
     input.className = "field-input fool-input";
     input.autocomplete = "off";
     input.spellcheck = false;
+    input.maxLength = 500; // matches api/_recheck.py's MAX_VALUE_LENGTH
     input.value = FOOL_STATE[field][side];
     wrap.append(input);
     return input;
@@ -3680,8 +3766,10 @@ function buildFoolRow(fieldDef) {
     FOOL_STATE[field].result = null;
     renderFoolRow(field);
     renderFoolVerdict();
-    clearTimeout(foolDebounceTimer);
-    foolDebounceTimer = setTimeout(() => foolCheckField(field), FOOL_DEBOUNCE_MS);
+    // This field's OWN timer only — editing a different row must never
+    // cancel this row's pending check (see FOOL_DEBOUNCE_TIMERS above).
+    clearTimeout(FOOL_DEBOUNCE_TIMERS[field]);
+    FOOL_DEBOUNCE_TIMERS[field] = setTimeout(() => foolCheckField(field), FOOL_DEBOUNCE_MS);
   }
   siInput.addEventListener("input", onEdit);
   blInput.addEventListener("input", onEdit);
@@ -3694,7 +3782,11 @@ function applyFoolTrick(trick) {
   FOOL_STATE[trick.field].bl = trick.bl;
   const refs = FOOL_INPUTS[trick.field];
   if (refs) { refs.siInput.value = trick.si; refs.blInput.value = trick.bl; }
-  clearTimeout(foolDebounceTimer); // a trick is immediate, not debounced
+  // A trick is immediate, not debounced — only this field's own pending
+  // timer is cancelled; foolCheckField's own seq guard (not this clear)
+  // is what protects against two rapid trick clicks on the same row
+  // resolving out of order.
+  clearTimeout(FOOL_DEBOUNCE_TIMERS[trick.field]);
   foolCheckField(trick.field);
 }
 
@@ -3703,8 +3795,8 @@ function resetFoolPanel() {
   for (const { field } of FOOL_FIELDS) {
     const refs = FOOL_INPUTS[field];
     if (refs) { refs.siInput.value = FOOL_STATE[field].si; refs.blInput.value = FOOL_STATE[field].bl; }
+    clearTimeout(FOOL_DEBOUNCE_TIMERS[field]);
   }
-  clearTimeout(foolDebounceTimer);
   foolCheckAll();
 }
 
